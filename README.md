@@ -5,9 +5,10 @@ spaces inside irregular land parcels.
 
 The current MVP uses Shapely for geometry and ezdxf for CAD output. It can:
 
-- read a JSON site boundary,
-- try multiple parking angles,
-- generate stalls with clear aisle access strips,
+- read the Phase 0+ JSON input model,
+- draw diagnostic layers for entrances, fixed features, and pedestrian/fire reservations,
+- generate a conservative Phase 1 layout from an entrance-connected main aisle,
+- reserve an end turnaround pad,
 - avoid obstacles,
 - write a DXF file with CAD layers,
 - write an SVG preview,
@@ -26,37 +27,113 @@ python -m venv .venv
 ## Quick Start
 
 ```powershell
-.\.venv\Scripts\python.exe -m openparkcad solve examples/simple_lot.json --out output/simple.dxf --preview output/simple.svg --report output/simple_report.json
+.\.venv\Scripts\python.exe -m openparkcad solve examples/phase0_site.json --out output/phase1_site.dxf --preview output/phase1_site.svg --report output/phase1_site_report.json
 ```
 
-Open `output/simple.svg` in a browser for a quick preview, or open the DXF in CAD.
-
-To try the Phase 0 input model with entrances, vehicle data, aisle classes,
-site features, and diagnostics:
-
-```powershell
-.\.venv\Scripts\python.exe -m openparkcad solve examples/phase0_site.json --out output/phase0_site.dxf --preview output/phase0_site.svg --report output/phase0_site_report.json
-```
+Open `output/phase1_site.svg` in a browser for a quick preview, or open the DXF in CAD.
 
 The report includes `input_diagnostics`, which separates active checks from
 future-facing fields that are parsed but not enforced yet.
+
+The Phase 1 generator currently uses the first supported circulation pattern:
+
+```text
+entry-capable entrance -> straight wide two-way main aisle -> end turnaround -> standard stalls on both sides
+```
+
+It tries a small set of heading offsets around the entrance direction and a few
+parallel offsets inside the entrance width, then keeps the legal main-aisle
+layout with the most stalls.
+
+It may also add one perpendicular branch from the main aisle. The branch must fit
+inside the usable site, connect to the main aisle, and reserve its own end
+turnaround.
+
+Branch start positions are auto-sampled by default. You can also control the
+sampling with:
+
+```json
+"optimization": {
+  "branch_start_step": 2.5
+}
+```
+
+The report includes branch candidate reasons such as
+`branch_too_short_for_turnaround` and `branch_does_not_improve_stall_count`.
+
+Layouts are selected by an explainable score, not only by stall count:
+
+```text
+score =
+  stall_count value
+  - aisle area penalty
+  - heading deviation penalty
+  - entrance offset penalty
+  - branch complexity penalty
+  - dead-end length penalty
+```
+
+The JSON report includes the full score breakdown.
+
+For Phase 1 explainability, the report also lists:
+
+- every generated aisle with its role and simple parent/entrance link,
+- every generated stall with the aisle that serves it,
+- unsupported Phase 1 input choices and the reason they were not generated.
+
+This is still conservative. It does not yet build loops, intersections, narrow
+aisles, or swept-path turning checks.
 
 ## Input Format
 
 ```json
 {
-  "name": "simple lot",
-  "boundary": [[0, 0], [60, 0], [60, 36], [42, 45], [0, 35]],
-  "obstacles": [
-    [[24, 14], [34, 14], [34, 22], [24, 22]]
-  ],
-  "stall": {
-    "width": 2.5,
-    "length": 5.3
+  "version": "0.1",
+  "name": "phase1 site",
+  "units": "m",
+  "site": {
+    "boundary": {
+      "type": "polygon",
+      "points": [[0, 0], [64, 0], [64, 34], [50, 45], [10, 39], [0, 28]]
+    },
+    "obstacles": []
   },
-  "aisle_width": 6.0,
-  "candidate_angles": [0, 15, 30, 45, 60, 75, 90],
-  "margin": 0.2
+  "entrances": [
+    {
+      "id": "main-gate",
+      "mode": "shared",
+      "center": [8, 0],
+      "width": 7.0,
+      "heading_degrees": 90,
+      "allowed_movements": ["enter", "exit"]
+    }
+  ],
+  "parking": {
+    "stall_types": [
+      {
+        "id": "standard-90",
+        "family": "perpendicular",
+        "width": 2.5,
+        "length": 5.3,
+        "allowed_angles": [90],
+        "enabled": true
+      }
+    ]
+  },
+  "aisles": {
+    "selection_mode": "fixed",
+    "fixed_class": "wide-two-way-no-cross",
+    "classes": [
+      {
+        "id": "wide-two-way-no-cross",
+        "width": 6.0,
+        "capacity": "two_vehicle",
+        "directionality": "two_way",
+        "centerline_crossing": "forbidden",
+        "enabled": true
+      }
+    ]
+  }
 }
 ```
 
@@ -64,11 +141,10 @@ All dimensions are interpreted as meters.
 
 ## Current Limitations
 
-This is still an early algorithmic kernel. It now checks that every counted stall
-has an adjacent clear aisle strip, but it does not yet prove full circulation
-connectivity, turning radius, fire access, slopes, local codes, accessible stalls,
-or mixed parking modules. The next serious step is replacing the row-by-row
-greedy generator with a candidate-generation plus optimization pipeline.
+This is still an early algorithmic kernel. It now connects a straight main aisle
+to an entrance and reserves an end turnaround, but it does not yet build full
+aisle graphs, intersections, turning swept paths, fire access validation, slopes,
+local code profiles, accessible stalls, or mixed parking modules.
 
 ## Design Notes
 

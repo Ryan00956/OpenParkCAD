@@ -132,11 +132,62 @@ Initial allowed design:
 ### Acceptance Criteria
 
 - every stall has an associated aisle,
+- the first generated aisle starts from an entry-capable entrance,
 - every aisle footprint is inside the usable area,
 - every stall footprint is inside the usable area,
 - obstacles are respected,
 - the report explains the selected angle and stall count,
 - unsupported aisle/stall types are ignored or reported clearly.
+
+### Current Implementation Status
+
+Phase 1 is now implemented as a conservative kernel, not as a global optimizer.
+The generator records enough metadata for the report to explain:
+
+- which entrance feeds the main aisle,
+- which aisle each generated stall uses,
+- whether an aisle is the main aisle, a branch, or a turnaround pad,
+- which parent aisle a branch or turnaround attaches to,
+- which Phase 1 input choices are unsupported and why.
+
+The current report includes `aisles`, `stalls`, `unsupported_phase1_inputs`,
+`input_diagnostics.stall_access`, and `input_diagnostics.aisle_connectivity`.
+
+This closes the Phase 1 acceptance criteria for the intentionally narrow
+generation pattern below. Full graph reachability remains Phase 2 work.
+
+### First Implementation Slice
+
+The first Phase 1 implementation is intentionally narrow:
+
+```text
+entrance -> one straight wide two-way main aisle -> end turnaround -> stalls on both sides
+```
+
+Rules:
+
+- use an entrance whose mode allows entering,
+- require the entrance width to fit the selected wide two-way aisle,
+- try a small set of headings around the entrance heading,
+- try a small set of parallel offsets inside the entrance width,
+- extend one straight main aisle along the selected heading,
+- stop the aisle before it leaves the usable area or hits an obstacle,
+- reserve a simple turnaround pad at the far end,
+- try one perpendicular branch from the main aisle,
+- auto-sample branch start positions unless explicit positions are provided,
+- require the branch to reserve its own turnaround,
+- leave one aisle-width throat before placing the first stall,
+- keep stalls out of the entrance throat and turnaround zone,
+- attach standard stalls only to the main aisle,
+- report `generation_mode = phase1_main_aisle`.
+- report the selected heading and heading delta.
+- report the selected entrance offset.
+- report branch candidate acceptance or rejection reasons.
+- select among candidates using an explainable score breakdown rather than raw
+  stall count only.
+
+This proves entrance-to-aisle connection without pretending that a full aisle
+graph, loops, intersections, or turning maneuvers exist yet.
 
 ### Non-Goals
 

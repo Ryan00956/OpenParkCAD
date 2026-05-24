@@ -926,8 +926,8 @@ site.boundary polygon                   active
 site.boundary curve_loop / arc          documented, future
 site.obstacles polygon                  active
 site.reserved_areas                     parsed later
-site_features                           documented, future
-entrances center / width / heading      parsed and drawn first
+site_features                           drawn, not enforced
+entrances center / width / heading      active for straight main aisle
 pedestrian routes                       reserved no-parking later
 fire lanes                              reserved no-parking later
 parking.stall_types standard-90         active
@@ -938,9 +938,19 @@ vehicles design_vehicle                 parsed first, used later
 aisles fixed wide two-way               active first
 aisles narrow one-way                   future graph phase
 aisles narrow two-way                   disabled until deadlock checks exist
-constraints circulation                 partially active first
+constraints entrance-to-main-aisle      active first
+constraints dead-end turnaround         active first
+constraints stall-to-aisle association  active first
+constraints phase1 aisle connectivity   active as simple parent links
+constraints full graph circulation      future
 constraints maneuvering                 documented, future
-optimization weights                    documented, future
+optimization heading_deltas_degrees     active for main aisle heading trials
+optimization entrance_offsets           active for entrance-width offset trials
+optimization branch_start_positions     active for one perpendicular branch trial
+optimization branch_start_step          active for branch start auto-sampling
+optimization weights                    active for Phase 1 scoring
+optimization score breakdown            active in JSON report
+report aisles / stalls traceability      active in JSON report
 diagnostics                             active as reporting structure
 ```
 

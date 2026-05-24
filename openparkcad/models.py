@@ -60,7 +60,7 @@ class SiteSpec:
     angle_degrees: float = 0.0
     candidate_angles: tuple[float, ...] = (0.0,)
     margin: float = 0.2
-    version: str = "legacy"
+    version: str = "0.1"
     units: str = "m"
     standards: dict[str, Any] = field(default_factory=dict)
     entrances: list[EntranceSpec] = field(default_factory=list)
@@ -74,7 +74,7 @@ class SiteSpec:
     optimization: dict[str, Any] = field(default_factory=dict)
     diagnostics: dict[str, Any] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
-    source_format: str = "legacy"
+    source_format: str = "phase0"
 
 
 @dataclass(frozen=True)
@@ -82,6 +82,8 @@ class ParkingStall:
     id: str
     polygon: Polygon
     angle_degrees: float
+    served_by_aisle_id: str | None = None
+    aisle_side: str | None = None
 
 
 @dataclass(frozen=True)
@@ -89,12 +91,22 @@ class ParkingAisle:
     id: str
     polygon: Polygon
     angle_degrees: float
+    role: str = "aisle"
+    connected_to_entrance_id: str | None = None
+    parent_aisle_id: str | None = None
 
 
 @dataclass(frozen=True)
 class AngleAttempt:
     angle_degrees: float
     stall_count: int
+    entrance_id: str | None = None
+    heading_delta_degrees: float = 0.0
+    entrance_offset: float = 0.0
+    branch_side: str | None = None
+    branch_start_u: float | None = None
+    branch_length: float | None = None
+    branch_candidates: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -104,6 +116,16 @@ class LayoutResult:
     aisles: list[ParkingAisle] = field(default_factory=list)
     selected_angle_degrees: float = 0.0
     attempts: list[AngleAttempt] = field(default_factory=list)
+    generation_mode: str = "phase1_main_aisle"
+    main_entrance_id: str | None = None
+    selected_heading_degrees: float | None = None
+    selected_heading_delta_degrees: float = 0.0
+    selected_entrance_offset: float = 0.0
+    selected_branch_side: str | None = None
+    selected_branch_start_u: float | None = None
+    selected_branch_length: float | None = None
+    score: dict[str, float] = field(default_factory=dict)
+    unsupported_phase1_inputs: list[dict[str, str]] = field(default_factory=list)
 
     @property
     def stall_count(self) -> int:
@@ -123,39 +145,9 @@ def _polygon(raw: Any) -> Polygon:
 
 
 def site_from_dict(data: dict[str, Any]) -> SiteSpec:
-    if "site" in data:
-        return _phase0_site_from_dict(data)
-    return _legacy_site_from_dict(data)
-
-
-def _legacy_site_from_dict(data: dict[str, Any]) -> SiteSpec:
-    stall_data = data.get("stall", {})
-    angle_degrees_raw = data.get("angle_degrees", 0.0)
-    candidate_angles_raw = data.get("candidate_angles", angle_degrees_raw)
-    if isinstance(candidate_angles_raw, list):
-        candidate_angles = tuple(float(item) for item in candidate_angles_raw)
-        angle_degrees = candidate_angles[0] if candidate_angles else 0.0
-    else:
-        angle_degrees = float(candidate_angles_raw)
-        candidate_angles = (angle_degrees,)
-    stall = StallSpec(
-        id=str(stall_data.get("id", "standard")),
-        width=float(stall_data.get("width", 2.5)),
-        length=float(stall_data.get("length", 5.3)),
-        allowed_angles=candidate_angles,
-    )
-
-    return SiteSpec(
-        name=str(data.get("name", "parking site")),
-        boundary=_polygon(data["boundary"]),
-        obstacles=[_polygon(item) for item in data.get("obstacles", [])],
-        stall=stall,
-        aisle_width=float(data.get("aisle_width", 6.0)),
-        angle_degrees=angle_degrees,
-        candidate_angles=candidate_angles,
-        margin=float(data.get("margin", 0.2)),
-        source_format="legacy",
-    )
+    if "site" not in data:
+        raise ValueError("OpenParkCAD now requires the Phase 0+ JSON shape with a top-level 'site' object")
+    return _phase0_site_from_dict(data)
 
 
 def _phase0_site_from_dict(data: dict[str, Any]) -> SiteSpec:

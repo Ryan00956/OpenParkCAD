@@ -3,10 +3,11 @@ from __future__ import annotations
 from dataclasses import asdict
 from typing import Any
 
-from openparkcad.models import SiteSpec
+from openparkcad.generator import phase1_unsupported_inputs
+from openparkcad.models import LayoutResult, SiteSpec
 
 
-def build_input_diagnostics(site: SiteSpec) -> dict[str, Any]:
+def build_input_diagnostics(site: SiteSpec, layout: LayoutResult | None = None) -> dict[str, Any]:
     active_fields = [
         "name",
         "units",
@@ -17,7 +18,9 @@ def build_input_diagnostics(site: SiteSpec) -> dict[str, Any]:
         "aisles.selected width",
         "constraints.setbacks.site_boundary",
     ]
-    if site.entrances:
+    if _phase1_main_aisle_active(layout):
+        active_fields.append("entrance-connected main aisle")
+    elif site.entrances:
         active_fields.append("entrances drawn in diagnostics")
 
     parsed_future_fields: list[str] = []
@@ -26,9 +29,13 @@ def build_input_diagnostics(site: SiteSpec) -> dict[str, Any]:
     if site.standards:
         parsed_future_fields.append("standards")
         warnings.append("standards are parsed as metadata only; legal compliance is not checked yet")
-    if site.entrances:
+    phase1_active = _phase1_main_aisle_active(layout)
+
+    if site.entrances and not phase1_active:
         parsed_future_fields.append("entrances")
         warnings.append("entrances are parsed and drawn, but aisle connectivity to entrances is not enforced yet")
+    elif phase1_active:
+        warnings.append("entrance-to-main-aisle connection is active; full aisle graph reachability is still future work")
     if site.vehicle:
         parsed_future_fields.append("vehicles.design_vehicle")
         warnings.append("vehicle dimensions and turning radius are parsed but not enforced by maneuver checks yet")
@@ -50,15 +57,17 @@ def build_input_diagnostics(site: SiteSpec) -> dict[str, Any]:
         warnings.append("maneuvering constraints are parsed but not enforced yet")
     if site.optimization:
         parsed_future_fields.append("optimization")
-        warnings.append("optimization weights are parsed but the current generator is still greedy")
+        warnings.append("optimization weights are active for Phase 1 scoring; candidate generation is still deliberately narrow")
+    unsupported = phase1_unsupported_inputs(site)
+    warnings.extend(f"{item['field']} unsupported in Phase 1: {item['reason']}" for item in unsupported)
 
     return {
         "source_format": site.source_format,
         "active_fields": active_fields,
         "parsed_future_fields": sorted(set(parsed_future_fields)),
         "warnings": warnings,
-        "field_support": _field_support(site),
-        "constraint_status": _constraint_status(site),
+        "field_support": _field_support(site, layout),
+        "constraint_status": _constraint_status(site, layout),
         "entrances": [asdict(item) for item in site.entrances],
         "vehicle": asdict(site.vehicle) if site.vehicle else None,
         "aisle_selection": {
@@ -66,11 +75,48 @@ def build_input_diagnostics(site: SiteSpec) -> dict[str, Any]:
             "fixed_class": site.fixed_aisle_class,
             "effective_width": site.aisle_width,
         },
+        "heading_selection": {
+            "selected_heading_degrees": layout.selected_heading_degrees if layout else None,
+            "selected_heading_delta_degrees": layout.selected_heading_delta_degrees if layout else None,
+            "candidate_heading_deltas_degrees": site.optimization.get("heading_deltas_degrees", [-20, -10, 0, 10, 20]),
+            "selected_entrance_offset": layout.selected_entrance_offset if layout else None,
+            "candidate_entrance_offsets": site.optimization.get("entrance_offsets", "auto"),
+        },
+        "branch_selection": {
+            "enabled": site.optimization.get("enable_branches", True),
+            "selected_side": layout.selected_branch_side if layout else None,
+            "selected_start_u": layout.selected_branch_start_u if layout else None,
+            "selected_length": layout.selected_branch_length if layout else None,
+            "candidate_start_positions": site.optimization.get("branch_start_positions", "auto"),
+            "branch_start_step": site.optimization.get("branch_start_step", "auto"),
+        },
+        "score": layout.score if layout else {},
         "active_stall_type": asdict(site.stall),
+        "unsupported_phase1_inputs": unsupported,
+        "stall_access": _stall_access(layout),
+        "aisle_connectivity": _aisle_connectivity(layout),
     }
 
 
-def _constraint_status(site: SiteSpec) -> list[dict[str, str]]:
+def _constraint_status(site: SiteSpec, layout: LayoutResult | None) -> list[dict[str, str]]:
+    entrance_status = {
+        "constraint": "entrance to main aisle",
+        "status": "active" if _phase1_main_aisle_active(layout) else "future",
+        "note": (
+            f"Main aisle starts from entrance {layout.main_entrance_id}."
+            if _phase1_main_aisle_active(layout)
+            else "Entrances are parsed and drawn but not connected to aisle graph yet."
+        ),
+    }
+    turnaround_status = {
+        "constraint": "dead-end turnaround",
+        "status": "active" if _phase1_main_aisle_active(layout) else "future",
+        "note": (
+            "A conservative turnaround pad is reserved at the end of each generated dead-end aisle."
+            if _phase1_main_aisle_active(layout)
+            else "Turnaround geometry is only created by the Phase 1 main aisle generator."
+        ),
+    }
     return [
         {
             "constraint": "geometry containment",
@@ -82,10 +128,30 @@ def _constraint_status(site: SiteSpec) -> list[dict[str, str]]:
             "status": "active",
             "note": "Polygon obstacles are removed from the usable area.",
         },
+        entrance_status,
+        turnaround_status,
         {
-            "constraint": "entrance connectivity",
+            "constraint": "stall-to-aisle association",
+            "status": "active" if _all_stalls_have_aisles(layout) else "future",
+            "note": (
+                "Each generated stall records the aisle that serves its front access side."
+                if _all_stalls_have_aisles(layout)
+                else "Stall-to-aisle association is only available after Phase 1 layout generation."
+            ),
+        },
+        {
+            "constraint": "phase1 aisle connectivity",
+            "status": "active" if _phase1_main_aisle_active(layout) else "future",
+            "note": (
+                "Generated Phase 1 aisles are main/turnaround/branch pieces attached to the entrance-connected main aisle."
+                if _phase1_main_aisle_active(layout)
+                else "Full aisle graph reachability is not implemented yet."
+            ),
+        },
+        {
+            "constraint": "full aisle graph reachability",
             "status": "future",
-            "note": "Entrances are parsed and drawn but not connected to aisle graph yet.",
+            "note": "Phase 1 records simple parent links only; full graph reachability starts in Phase 2.",
         },
         {
             "constraint": "vehicle turning radius",
@@ -105,7 +171,7 @@ def _constraint_status(site: SiteSpec) -> list[dict[str, str]]:
     ]
 
 
-def _field_support(site: SiteSpec) -> dict[str, str]:
+def _field_support(site: SiteSpec, layout: LayoutResult | None) -> dict[str, str]:
     support = {
         "version": "active",
         "name": "active",
@@ -116,7 +182,7 @@ def _field_support(site: SiteSpec) -> dict[str, str]:
         "site.obstacles.polygon": "active",
         "site.reserved_areas": "future",
         "site_features": "drawn_not_enforced" if site.site_features else "future",
-        "entrances": "drawn_not_enforced" if site.entrances else "future",
+        "entrances": "active" if _phase1_main_aisle_active(layout) else ("drawn_not_enforced" if site.entrances else "future"),
         "pedestrian_and_emergency.pedestrian_routes": _pedestrian_status(site, "pedestrian_routes"),
         "pedestrian_and_emergency.fire_lanes": _pedestrian_status(site, "fire_lanes"),
         "vehicles.design_vehicle": "parsed_not_enforced" if site.vehicle else "future",
@@ -126,13 +192,21 @@ def _field_support(site: SiteSpec) -> dict[str, str]:
         "parking.access_sides": "parsed_not_enforced",
         "parking.blocked_sides": "parsed_not_enforced",
         "aisles.fixed_wide_two_way": "active",
+        "aisles.heading_candidate_selection": "active" if _phase1_main_aisle_active(layout) else "future",
+        "aisles.entrance_offset_selection": "active" if _phase1_main_aisle_active(layout) else "future",
+        "aisles.single_branch_candidate": "active" if _phase1_main_aisle_active(layout) else "future",
         "aisles.narrow_one_way": "future",
         "aisles.narrow_two_way": "future",
         "constraints.geometry_containment": "active",
-        "constraints.entrance_connectivity": "future",
+        "constraints.entrance_to_main_aisle": "active" if _phase1_main_aisle_active(layout) else "future",
+        "constraints.dead_end_turnaround": "active" if _phase1_main_aisle_active(layout) else "future",
+        "constraints.stall_to_aisle_association": "active" if _all_stalls_have_aisles(layout) else "future",
+        "constraints.phase1_aisle_connectivity": "active" if _phase1_main_aisle_active(layout) else "future",
+        "constraints.full_aisle_graph_reachability": "future",
         "constraints.turning_radius": "future",
         "constraints.swept_path": "future",
         "optimization.weights": "parsed_not_enforced" if site.optimization else "future",
+        "optimization.score_breakdown": "active" if _phase1_main_aisle_active(layout) else "future",
         "diagnostics.report": "active",
         "diagnostics.debug_layers": "active",
     }
@@ -143,3 +217,38 @@ def _pedestrian_status(site: SiteSpec, key: str) -> str:
     if site.pedestrian_and_emergency.get(key):
         return "drawn_not_enforced"
     return "future"
+
+
+def _phase1_main_aisle_active(layout: LayoutResult | None) -> bool:
+    return bool(layout and layout.generation_mode == "phase1_main_aisle" and layout.main_entrance_id)
+
+
+def _all_stalls_have_aisles(layout: LayoutResult | None) -> bool:
+    return bool(layout and layout.stalls and all(stall.served_by_aisle_id for stall in layout.stalls))
+
+
+def _stall_access(layout: LayoutResult | None) -> list[dict[str, str | None]]:
+    if not layout:
+        return []
+    return [
+        {
+            "stall_id": stall.id,
+            "served_by_aisle_id": stall.served_by_aisle_id,
+            "aisle_side": stall.aisle_side,
+        }
+        for stall in layout.stalls
+    ]
+
+
+def _aisle_connectivity(layout: LayoutResult | None) -> list[dict[str, str | None]]:
+    if not layout:
+        return []
+    return [
+        {
+            "aisle_id": aisle.id,
+            "role": aisle.role,
+            "connected_to_entrance_id": aisle.connected_to_entrance_id,
+            "parent_aisle_id": aisle.parent_aisle_id,
+        }
+        for aisle in layout.aisles
+    ]

@@ -3,6 +3,7 @@ from pathlib import Path
 
 from openparkcad.diagnostic_geometry import pedestrian_emergency_shapes, site_feature_shapes
 from openparkcad.diagnostics import build_input_diagnostics
+from openparkcad.generator import generate_layout
 from openparkcad.models import site_from_dict
 
 
@@ -33,7 +34,7 @@ def test_phase0_diagnostics_are_honest_about_future_fields():
     assert diagnostics["field_support"]["entrances"] == "drawn_not_enforced"
     assert diagnostics["field_support"]["vehicles.design_vehicle"] == "parsed_not_enforced"
     assert any("turning radius" in item for item in diagnostics["warnings"])
-    assert any(item["constraint"] == "entrance connectivity" and item["status"] == "future" for item in diagnostics["constraint_status"])
+    assert any(item["constraint"] == "entrance to main aisle" and item["status"] == "future" for item in diagnostics["constraint_status"])
 
 
 def test_phase0_diagnostic_shapes_are_available_for_export():
@@ -49,11 +50,37 @@ def test_phase0_diagnostic_shapes_are_available_for_export():
     assert {shape.layer for shape in pedestrian_shapes} == {"PEDESTRIAN"}
 
 
-def test_legacy_example_still_parses():
-    data = json.loads(Path("examples/simple_lot.json").read_text(encoding="utf-8"))
-
+def test_phase0_diagnostics_mark_main_aisle_connection_active_with_layout():
+    data = json.loads(Path("examples/phase0_site.json").read_text(encoding="utf-8"))
     site = site_from_dict(data)
+    layout = generate_layout(site)
 
-    assert site.source_format == "legacy"
-    assert site.stall.width == 2.5
-    assert site.candidate_angles == (0.0, 15.0, 30.0, 45.0, 60.0, 75.0, 90.0)
+    diagnostics = build_input_diagnostics(site, layout)
+
+    assert layout.generation_mode == "phase1_main_aisle"
+    assert diagnostics["field_support"]["entrances"] == "active"
+    assert diagnostics["field_support"]["constraints.entrance_to_main_aisle"] == "active"
+    assert diagnostics["field_support"]["constraints.dead_end_turnaround"] == "active"
+    assert diagnostics["field_support"]["aisles.heading_candidate_selection"] == "active"
+    assert diagnostics["field_support"]["aisles.entrance_offset_selection"] == "active"
+    assert diagnostics["field_support"]["aisles.single_branch_candidate"] == "active"
+    assert diagnostics["heading_selection"]["selected_heading_degrees"] is not None
+    assert diagnostics["heading_selection"]["selected_entrance_offset"] is not None
+    assert diagnostics["branch_selection"]["enabled"] is True
+    assert diagnostics["field_support"]["optimization.score_breakdown"] == "active"
+    assert diagnostics["score"]["total"] == layout.score["total"]
+    assert any(item["constraint"] == "entrance to main aisle" and item["status"] == "active" for item in diagnostics["constraint_status"])
+
+
+def test_deprecated_top_level_boundary_shape_is_rejected():
+    data = {
+        "name": "old shape",
+        "boundary": [[0, 0], [10, 0], [10, 10], [0, 10]],
+    }
+
+    try:
+        site_from_dict(data)
+    except ValueError as exc:
+        assert "top-level 'site' object" in str(exc)
+    else:
+        raise AssertionError("deprecated input shape should be rejected")

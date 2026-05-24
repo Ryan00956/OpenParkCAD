@@ -166,12 +166,16 @@
   },
   "optimization": {
     "objective": "conservative",
+    "heading_deltas_degrees": [-20, -10, 0, 10, 20],
+    "entrance_offsets": [-0.5, 0, 0.5],
+    "branch_start_step": 2.5,
     "weights": {
       "stall_count": 100.0,
       "aisle_area": -1.0,
-      "dead_end": -30.0,
-      "reverse_distance": -5.0,
-      "conflict_point": -10.0
+      "heading_delta": -2.0,
+      "entrance_offset": -3.0,
+      "branch_count": -15.0,
+      "dead_end_length": -0.5
     }
   },
   "diagnostics": {
