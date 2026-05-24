@@ -1,0 +1,188 @@
+{
+  "version": "0.1",
+  "name": "phase0 realistic input sample",
+  "units": "m",
+  "standards": {
+    "jurisdiction": "CN",
+    "standard_profile": "custom",
+    "strictness": "conservative",
+    "notes": "Phase 0 records standard intent but does not claim legal compliance."
+  },
+  "site": {
+    "boundary": {
+      "type": "polygon",
+      "points": [[0, 0], [64, 0], [64, 34], [50, 45], [10, 39], [0, 28]]
+    },
+    "obstacles": [
+      {
+        "id": "equipment-room",
+        "type": "building",
+        "geometry": {
+          "type": "polygon",
+          "points": [[24, 13], [34, 13], [34, 21], [24, 21]]
+        },
+        "clearance": 0.3
+      }
+    ],
+    "reserved_areas": []
+  },
+  "site_features": [
+    {
+      "id": "column-a1",
+      "type": "column",
+      "geometry": {
+        "type": "circle",
+        "center": [44, 16],
+        "radius": 0.35
+      },
+      "clearance": 0.3,
+      "affects": ["vehicle_clearance", "door_clearance"]
+    },
+    {
+      "id": "charger-demo",
+      "type": "charging_post",
+      "geometry": {
+        "type": "rectangle",
+        "origin": [14, 32],
+        "width": 0.5,
+        "height": 0.4,
+        "rotation_degrees": 0
+      },
+      "clearance": 0.4,
+      "affects": ["stall_access"]
+    }
+  ],
+  "entrances": [
+    {
+      "id": "main-gate",
+      "mode": "shared",
+      "center": [8, 0],
+      "width": 7.0,
+      "heading_degrees": 90,
+      "allowed_movements": ["enter", "exit"]
+    }
+  ],
+  "pedestrian_and_emergency": {
+    "pedestrian_routes": [
+      {
+        "id": "walkway-demo",
+        "geometry": {
+          "type": "polyline_buffer",
+          "points": [[0, 30], [18, 36]],
+          "width": 1.8
+        },
+        "priority": "future"
+      }
+    ],
+    "fire_lanes": [],
+    "emergency_access_required": false
+  },
+  "vehicles": {
+    "design_vehicle": {
+      "id": "passenger-car",
+      "length": 4.8,
+      "width": 1.9,
+      "wheelbase": 2.8,
+      "min_turning_radius": 5.5,
+      "swept_path_margin": 0.3,
+      "max_reverse_distance": 12.0
+    }
+  },
+  "parking": {
+    "stall_types": [
+      {
+        "id": "standard-90",
+        "family": "perpendicular",
+        "width": 2.5,
+        "length": 5.3,
+        "allowed_angles": [0, 15, 30, 45, 60, 75, 90],
+        "drive_over": false,
+        "access_sides": ["front"],
+        "enabled": true
+      },
+      {
+        "id": "ev-front-post",
+        "family": "perpendicular",
+        "width": 2.6,
+        "length": 5.5,
+        "allowed_angles": [90],
+        "drive_over": false,
+        "access_sides": ["front"],
+        "blocked_sides": ["back"],
+        "fixed_features": [
+          {
+            "type": "charging_post",
+            "side": "back",
+            "offset": 0.5,
+            "clearance": 0.4
+          }
+        ],
+        "enabled": false
+      }
+    ],
+    "quotas": {
+      "accessible_min": 0,
+      "ev_min": 0
+    }
+  },
+  "aisles": {
+    "selection_mode": "fixed",
+    "fixed_class": "wide-two-way-no-cross",
+    "classes": [
+      {
+        "id": "wide-two-way-no-cross",
+        "width": 6.0,
+        "capacity": "two_vehicle",
+        "directionality": "two_way",
+        "centerline_crossing": "forbidden",
+        "enabled": true
+      },
+      {
+        "id": "narrow-one-way",
+        "width": 3.5,
+        "capacity": "single_vehicle",
+        "directionality": "one_way",
+        "centerline_crossing": "not_applicable",
+        "enabled": false
+      }
+    ]
+  },
+  "constraints": {
+    "setbacks": {
+      "site_boundary": 0.2,
+      "obstacle": 0.3
+    },
+    "circulation": {
+      "require_all_stalls_reachable": true,
+      "require_exit_path": true,
+      "allow_dead_end_aisles": false,
+      "allow_narrow_two_way": false
+    },
+    "maneuvering": {
+      "require_turning_radius_check": true,
+      "require_swept_path_check": false,
+      "max_reverse_distance": 12.0
+    }
+  },
+  "optimization": {
+    "objective": "conservative",
+    "weights": {
+      "stall_count": 100.0,
+      "aisle_area": -1.0,
+      "dead_end": -30.0,
+      "reverse_distance": -5.0,
+      "conflict_point": -10.0
+    }
+  },
+  "diagnostics": {
+    "explain_rejections": true,
+    "export_debug_layers": true,
+    "include_unsupported_fields": true,
+    "report_constraint_status": true
+  },
+  "metadata": {
+    "author": "OpenParkCAD",
+    "coordinate_system": "local meters",
+    "notes": "Phase 0 sample with future-facing fields."
+  }
+}

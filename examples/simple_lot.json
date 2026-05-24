@@ -1,0 +1,14 @@
+{
+  "name": "simple irregular lot",
+  "boundary": [[0, 0], [62, 0], [62, 34], [48, 44], [12, 38], [0, 28]],
+  "obstacles": [
+    [[24, 13], [34, 13], [34, 21], [24, 21]]
+  ],
+  "stall": {
+    "width": 2.5,
+    "length": 5.3
+  },
+  "aisle_width": 6.0,
+  "candidate_angles": [0, 15, 30, 45, 60, 75, 90],
+  "margin": 0.2
+}

@@ -1,0 +1,32 @@
+[project]
+name = "openparkcad"
+version = "0.1.0"
+description = "Minimal Python parking layout generator for irregular lots."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "ezdxf>=1.3",
+  "matplotlib>=3.9",
+  "ortools>=9.10",
+  "shapely>=2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+]
+
+[project.scripts]
+openparkcad = "openparkcad.cli:main"
+
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["openparkcad*"]
+exclude = ["examples*", "output*", "tests*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
