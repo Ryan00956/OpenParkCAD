@@ -94,6 +94,7 @@ class ParkingAisle:
     role: str = "aisle"
     connected_to_entrance_id: str | None = None
     parent_aisle_id: str | None = None
+    connected_aisle_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -127,6 +128,7 @@ class LayoutResult:
     selected_branch_start_u: float | None = None
     selected_branch_length: float | None = None
     selected_branches: list[dict[str, Any]] = field(default_factory=list)
+    selected_connectors: list[dict[str, Any]] = field(default_factory=list)
     score: dict[str, float] = field(default_factory=dict)
     graph_validation: dict[str, Any] = field(default_factory=dict)
     unsupported_phase1_inputs: list[dict[str, str]] = field(default_factory=list)

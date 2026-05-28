@@ -89,9 +89,12 @@ def build_input_diagnostics(site: SiteSpec, layout: LayoutResult | None = None) 
             "selected_start_u": layout.selected_branch_start_u if layout else None,
             "selected_length": layout.selected_branch_length if layout else None,
             "selected_branches": layout.selected_branches if layout else [],
+            "selected_connectors": layout.selected_connectors if layout else [],
             "candidate_start_positions": site.optimization.get("branch_start_positions", "auto"),
+            "branch_sides": site.optimization.get("branch_sides", ["left", "right"]),
             "branch_start_step": site.optimization.get("branch_start_step", "auto"),
             "max_branches": site.optimization.get("max_branches", 2),
+            "enable_connectors": site.optimization.get("enable_connectors", True),
         },
         "score": layout.score if layout else {},
         "active_stall_type": asdict(site.stall),
@@ -258,6 +261,7 @@ def _aisle_connectivity(layout: LayoutResult | None) -> list[dict[str, str | Non
             "role": aisle.role,
             "connected_to_entrance_id": aisle.connected_to_entrance_id,
             "parent_aisle_id": aisle.parent_aisle_id,
+            "connected_aisle_ids": ",".join(aisle.connected_aisle_ids) if aisle.connected_aisle_ids else None,
         }
         for aisle in layout.aisles
     ]

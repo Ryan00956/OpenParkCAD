@@ -65,6 +65,7 @@ def _write_report(layout, path: str) -> None:
             "length": layout.selected_branch_length,
         },
         "selected_branches": layout.selected_branches,
+        "selected_connectors": layout.selected_connectors,
         "score": layout.score,
         "unsupported_phase1_inputs": layout.unsupported_phase1_inputs,
         "aisles": [
@@ -73,6 +74,7 @@ def _write_report(layout, path: str) -> None:
                 "role": aisle.role,
                 "connected_to_entrance_id": aisle.connected_to_entrance_id,
                 "parent_aisle_id": aisle.parent_aisle_id,
+                "connected_aisle_ids": list(aisle.connected_aisle_ids),
             }
             for aisle in layout.aisles
         ],

@@ -322,6 +322,68 @@ def test_phase2c_layout_can_select_multiple_branch_candidates():
     assert any(item["reason"] == "branch_overlaps_existing_layout" for item in layout.attempts[0].branch_candidates)
 
 
+def test_phase2d_layout_can_connect_same_side_branches():
+    site = SiteSpec(
+        name="connector",
+        boundary=[(0, 0), (90, 0), (90, 70), (0, 70)],
+        stall=StallSpec(width=2.5, length=5.0, allowed_angles=(90.0,)),
+        aisle_width=6.0,
+        margin=0.0,
+        entrances=[
+            EntranceSpec(
+                id="main",
+                mode="shared",
+                center=(45, 0),
+                width=8.0,
+                heading_degrees=90.0,
+            )
+        ],
+        aisle_classes=[
+            AisleClassSpec(
+                id="wide-two-way-no-cross",
+                width=6.0,
+                capacity="two_vehicle",
+                directionality="two_way",
+            )
+        ],
+        fixed_aisle_class="wide-two-way-no-cross",
+        optimization={
+            "heading_deltas_degrees": [0],
+            "entrance_offsets": [0],
+            "branch_start_positions": [18, 32, 46],
+            "branch_sides": ["left"],
+            "max_branches": 2,
+            "weights": {
+                "stall_count": 100,
+                "aisle_area": 0,
+                "dead_end_length": -20,
+                "branch_count": 0,
+            },
+        },
+    )
+
+    layout = generate_layout(site)
+
+    assert layout.selected_connectors == [
+        {
+            "id": "A-CONNECTOR-001",
+            "connects": ["A-BRANCH-001", "A-BRANCH-002"],
+            "removed_stalls": 0,
+            "removed_turnarounds": ["A-BRANCH-001-TURNAROUND", "A-BRANCH-002-TURNAROUND"],
+        }
+    ]
+    assert "A-BRANCH-001-TURNAROUND" not in {aisle.id for aisle in layout.aisles}
+    assert "A-BRANCH-002-TURNAROUND" not in {aisle.id for aisle in layout.aisles}
+    connector = next(aisle for aisle in layout.aisles if aisle.id == "A-CONNECTOR-001")
+    assert connector.role == "connector"
+    assert connector.parent_aisle_id == "A-BRANCH-001"
+    assert connector.connected_aisle_ids == ("A-BRANCH-002",)
+    assert layout.graph_validation["valid"] is True
+    assert "A-CONNECTOR-001" in layout.graph_validation["reachable_aisles"]
+    assert {item["aisle_id"] for item in layout.graph_validation["dead_ends"]} == {"A-TURNAROUND"}
+    assert any(item["reason"] == "connector_improves_score" for item in layout.attempts[0].branch_candidates)
+
+
 def test_phase1_branch_attempts_report_candidate_reasons():
     site = SiteSpec(
         name="branch-report",

@@ -213,7 +213,7 @@ def _with_best_branch(
     for iteration in range(1, max_branches + 1):
         round_best = best
         for branch_u in _branch_start_positions(site, main_aisle_length):
-            for side in ("left", "right"):
+            for side in _branch_sides(site):
                 branch_index = _next_branch_index(best)
                 candidate, diagnostic = _branch_layout(
                     site,
@@ -235,6 +235,7 @@ def _with_best_branch(
         if round_best is best:
             break
         best = round_best
+    best = _with_best_connectors(site, available, entrance, heading_degrees, best, finalize_layout, graph_valid, score_total, branch_candidates)
     return best, branch_candidates
 
 
@@ -407,6 +408,168 @@ def _stalls_along_branch(
     return stalls
 
 
+def _with_best_connectors(
+    site: SiteSpec,
+    available,
+    entrance: EntranceSpec,
+    heading_degrees: float,
+    base: LayoutResult,
+    finalize_layout: FinalizeLayout,
+    graph_valid: GraphValid,
+    score_total: LayoutScoreTotal,
+    diagnostics: list[dict[str, object]],
+) -> LayoutResult:
+    if not site.optimization.get("enable_connectors", True):
+        return base
+    best = base
+    for branch_a, branch_b in _connector_pairs(best):
+        candidate, diagnostic = _connector_layout(site, available, entrance, heading_degrees, best, branch_a, branch_b, finalize_layout, graph_valid, score_total)
+        diagnostics.append(diagnostic)
+        if candidate and graph_valid(candidate) and score_total(candidate) > score_total(best):
+            best = candidate
+    return best
+
+
+def _connector_layout(
+    site: SiteSpec,
+    available,
+    entrance: EntranceSpec,
+    heading_degrees: float,
+    base: LayoutResult,
+    branch_a: dict[str, object],
+    branch_b: dict[str, object],
+    finalize_layout: FinalizeLayout,
+    graph_valid: GraphValid,
+    score_total: LayoutScoreTotal,
+) -> tuple[LayoutResult | None, dict[str, object]]:
+    connector_id = f"A-CONNECTOR-{len(base.selected_connectors) + 1:03d}"
+    branch_a_id = str(branch_a["id"])
+    branch_b_id = str(branch_b["id"])
+    connector = _connector_polygon(site, entrance, heading_degrees, branch_a, branch_b)
+    diagnostic: dict[str, object] = {
+        "connector_id": connector_id,
+        "connects": [branch_a_id, branch_b_id],
+        "reason": "connector_evaluated",
+    }
+    if connector is None:
+        diagnostic["reason"] = "connector_geometry_not_possible"
+        return None, diagnostic
+    if not available.covers(connector):
+        diagnostic["reason"] = "connector_geometry_outside_usable_area"
+        return None, diagnostic
+    conflict = _connector_conflict(base, connector, {branch_a_id, branch_b_id})
+    if conflict:
+        diagnostic["reason"] = "connector_overlaps_existing_layout"
+        diagnostic["conflict_id"] = conflict
+        return None, diagnostic
+
+    connector_drivable = connector
+    kept_stalls = [
+        stall for stall in base.stalls if not area_overlaps(ShapelyPolygon(stall.polygon), connector_drivable)
+    ]
+    removed_stalls = base.stall_count - len(kept_stalls)
+    removed_turnarounds = _connected_turnaround_ids({branch_a_id, branch_b_id})
+    kept_aisles = [
+        aisle for aisle in base.aisles if aisle.id not in removed_turnarounds
+    ]
+    connector_aisle = ParkingAisle(
+        id=connector_id,
+        polygon=polygon_points(connector_drivable),
+        angle_degrees=heading_degrees,
+        role="connector",
+        parent_aisle_id=branch_a_id,
+        connected_aisle_ids=(branch_b_id,),
+    )
+    selected_connectors = [
+        *base.selected_connectors,
+        {
+            "id": connector_id,
+            "connects": [branch_a_id, branch_b_id],
+            "removed_stalls": removed_stalls,
+            "removed_turnarounds": sorted(removed_turnarounds),
+        },
+    ]
+    result = finalize_layout(
+        LayoutResult(
+            site=site,
+            stalls=_renumber_stalls(kept_stalls),
+            aisles=[*kept_aisles, connector_aisle],
+            selected_angle_degrees=base.selected_angle_degrees,
+            generation_mode=base.generation_mode,
+            main_entrance_id=base.main_entrance_id,
+            selected_heading_degrees=base.selected_heading_degrees,
+            selected_heading_delta_degrees=base.selected_heading_delta_degrees,
+            selected_entrance_offset=base.selected_entrance_offset,
+            selected_branch_side=base.selected_branch_side,
+            selected_branch_start_u=base.selected_branch_start_u,
+            selected_branch_length=base.selected_branch_length,
+            selected_branches=base.selected_branches,
+            selected_connectors=selected_connectors,
+            unsupported_phase1_inputs=base.unsupported_phase1_inputs,
+        )
+    )
+    diagnostic["stall_count"] = result.stall_count
+    diagnostic["removed_stalls"] = removed_stalls
+    diagnostic["removed_turnarounds"] = sorted(removed_turnarounds)
+    diagnostic["graph_valid"] = graph_valid(result)
+    diagnostic["graph_errors"] = list(result.graph_validation.get("errors", []))
+    if not graph_valid(result):
+        diagnostic["reason"] = "connector_invalid_traffic_graph"
+        return result, diagnostic
+    if score_total(result) <= score_total(base):
+        diagnostic["reason"] = "connector_does_not_improve_score"
+        return result, diagnostic
+    diagnostic["reason"] = "connector_improves_score"
+    return result, diagnostic
+
+
+def _connector_pairs(layout: LayoutResult) -> list[tuple[dict[str, object], dict[str, object]]]:
+    pairs: list[tuple[dict[str, object], dict[str, object]]] = []
+    for side in ("left", "right"):
+        branches = sorted(
+            [branch for branch in layout.selected_branches if branch.get("side") == side],
+            key=lambda item: float(item["start_u"]),
+        )
+        for first, second in zip(branches, branches[1:]):
+            pairs.append((first, second))
+    return pairs
+
+
+def _connector_polygon(site: SiteSpec, entrance: EntranceSpec, heading_degrees: float, branch_a: dict[str, object], branch_b: dict[str, object]):
+    u1 = float(branch_a["start_u"])
+    u2 = float(branch_b["start_u"])
+    if abs(u2 - u1) <= site.aisle_width:
+        return None
+    side = str(branch_a["side"])
+    if side != str(branch_b["side"]):
+        return None
+    direction = 1 if side == "left" else -1
+    length = min(float(branch_a["length"]), float(branch_b["length"]))
+    center_v = direction * (length - site.aisle_width / 2)
+    local = (
+        min(u1, u2),
+        center_v - site.aisle_width / 2,
+        max(u1, u2),
+        center_v + site.aisle_width / 2,
+    )
+    return normalized_local_box_to_world(local, entrance, heading_degrees)
+
+
+def _connector_conflict(layout: LayoutResult, connector, endpoint_branch_ids: set[str]) -> str | None:
+    allowed = set(endpoint_branch_ids)
+    allowed.update(f"{branch_id}-TURNAROUND" for branch_id in endpoint_branch_ids)
+    for aisle in layout.aisles:
+        if aisle.id in allowed:
+            continue
+        if area_overlaps(ShapelyPolygon(aisle.polygon), connector):
+            return aisle.id
+    return None
+
+
+def _connected_turnaround_ids(branch_ids: set[str]) -> set[str]:
+    return {f"{branch_id}-TURNAROUND" for branch_id in branch_ids}
+
+
 def _max_clear_aisle_length(site: SiteSpec, available, entrance: EntranceSpec, heading_degrees: float, start: float) -> float:
     min_x, min_y, max_x, max_y = ShapelyPolygon(site.boundary).bounds
     diagonal = math.hypot(max_x - min_x, max_y - min_y)
@@ -478,6 +641,14 @@ def _branch_start_positions(site: SiteSpec, main_aisle_length: float) -> tuple[f
     positions.append(midpoint)
     positions.append(round(max_u, 6))
     return tuple(sorted(set(positions)))
+
+
+def _branch_sides(site: SiteSpec) -> tuple[str, ...]:
+    raw = site.optimization.get("branch_sides")
+    if isinstance(raw, list):
+        sides = tuple(str(item) for item in raw if str(item) in {"left", "right"})
+        return sides or ("left", "right")
+    return ("left", "right")
 
 
 def _max_branches(site: SiteSpec) -> int:

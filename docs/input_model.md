@@ -948,11 +948,14 @@ optimization heading_deltas_degrees     active for main aisle heading trials
 optimization entrance_offsets           active for entrance-width offset trials
 optimization branch_start_positions     active for perpendicular branch trials
 optimization branch_start_step          active for branch start auto-sampling
+optimization branch_sides               active for branch side filtering
 optimization max_branches               active for limited multi-branch search
+optimization enable_connectors          active for same-side branch connectors
 optimization weights                    active for Phase 1 scoring
 optimization score breakdown            active in JSON report
 report aisles / stalls traceability      active in JSON report
 report selected_branches                active in JSON report
+report selected_connectors              active, includes removed turnaround pads
 report traffic_graph validation          active in JSON report
 report attempt graph rejection           active in JSON report
 diagnostics                             active as reporting structure

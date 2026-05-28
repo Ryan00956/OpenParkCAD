@@ -111,6 +111,12 @@ def _metrics(layout: LayoutResult) -> dict[str, float]:
 
 def _dead_end_lengths(layout: LayoutResult) -> list[float]:
     lengths = []
+    connected_branch_ids = {
+        branch_id
+        for connector in layout.selected_connectors
+        for branch_id in connector.get("connects", [])
+        if isinstance(branch_id, str)
+    }
     if layout.aisles:
         main = next((aisle for aisle in layout.aisles if aisle.id == "A-MAIN"), None)
         if main:
@@ -118,6 +124,8 @@ def _dead_end_lengths(layout: LayoutResult) -> list[float]:
     if layout.selected_branch_length and not layout.selected_branches:
         lengths.append(layout.selected_branch_length)
     for branch in layout.selected_branches:
+        if branch.get("id") in connected_branch_ids:
+            continue
         length = branch.get("length")
         if isinstance(length, int | float):
             lengths.append(float(length))

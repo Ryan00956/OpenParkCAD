@@ -80,6 +80,17 @@ def build_traffic_graph(layout: LayoutResult) -> TrafficGraph:
                     aisle_id=aisle.id,
                 )
             )
+        for connected_aisle_id in aisle.connected_aisle_ids:
+            edges.append(
+                TrafficEdge(
+                    id=f"E-CONNECTOR-{aisle.id}-{connected_aisle_id}",
+                    from_node_id=aisle_node_id,
+                    to_node_id=_aisle_node_id(connected_aisle_id),
+                    directionality=_layout_aisle_directionality(layout.site),
+                    role="aisle_connection",
+                    aisle_id=aisle.id,
+                )
+            )
 
     aisle_ids = {aisle.id for aisle in layout.aisles}
     stall_access = [
@@ -299,6 +310,8 @@ def _node_kind_for_aisle(aisle: ParkingAisle) -> str:
         return "turnaround"
     if aisle.role == "branch":
         return "branch_aisle"
+    if aisle.role == "connector":
+        return "connector_aisle"
     if aisle.role == "main":
         return "main_aisle"
     return "aisle"

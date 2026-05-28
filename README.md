@@ -51,20 +51,29 @@ must fit inside the usable site, connect to the main aisle, avoid conflicts with
 existing branch geometry, pass traffic graph validation, improve the score, and
 reserve its own end turnaround.
 
+When same-side branches are selected, the solver may add a connector aisle
+between adjacent branch ends. This can form a simple U-shaped loop when the
+extra aisle reduces the dead-end penalty enough to offset any lost stalls or
+added aisle area. Once a connector is accepted, the endpoint branch turnaround
+pads are removed because those branches are no longer dead ends.
+
 Branch start positions are auto-sampled by default. You can also control the
 sampling with:
 
 ```json
 "optimization": {
   "branch_start_step": 2.5,
-  "max_branches": 2
+  "branch_sides": ["left", "right"],
+  "max_branches": 2,
+  "enable_connectors": true
 }
 ```
 
 The report includes branch candidate reasons such as
 `branch_too_short_for_turnaround`, `branch_overlaps_existing_layout`, and
 `branch_does_not_improve_score`. Selected branches are listed in
-`selected_branches`.
+`selected_branches`; selected connector aisles are listed in
+`selected_connectors`.
 
 Layouts are selected by an explainable score, not only by stall count:
 

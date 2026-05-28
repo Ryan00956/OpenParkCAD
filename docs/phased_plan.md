@@ -291,6 +291,39 @@ may include:
 - `branch_does_not_improve_score`,
 - `branch_improves_stall_count`.
 
+### Phase 2D: Same-Side Branch Connectors
+
+The generator can now try a limited connector aisle between adjacent same-side
+branches. This creates the first simple loop-like circulation pattern while
+staying within the conservative wide-two-way-only model.
+
+Current rules:
+
+- `optimization.enable_connectors` enables connector trials. It defaults to
+  `true`.
+- `optimization.branch_sides` can restrict branch generation to `left`,
+  `right`, or both.
+- A connector is tried only between adjacent selected branches on the same side
+  of the main aisle.
+- The connector is placed near the branch ends.
+- The connector may overlap its two endpoint branches and their turnaround pads.
+- The connector is rejected if it overlaps other generated aisles.
+- The connector removes the two endpoint branch turnaround pads because those
+  branches are no longer dead ends.
+- Stalls overlapped by the connector are removed from the candidate.
+- The candidate must pass traffic graph validation.
+- The candidate must improve the score before it is kept.
+
+The report adds `selected_connectors`. Connector candidate diagnostics may
+include:
+
+- `connector_geometry_not_possible`,
+- `connector_geometry_outside_usable_area`,
+- `connector_overlaps_existing_layout`,
+- `connector_invalid_traffic_graph`,
+- `connector_does_not_improve_score`,
+- `connector_improves_score`.
+
 ## Phase 3: Maneuver Validity
 
 ### Goal
