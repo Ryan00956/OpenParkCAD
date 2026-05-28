@@ -952,12 +952,15 @@ optimization branch_sides               active for branch side filtering
 optimization max_branches               active for limited multi-branch search
 optimization enable_connectors          active for same-side branch connectors
 optimization connector_throat_length    active for connector-side stall clearance
+optimization maneuver_access_depth      active for Phase 3A access envelope
+optimization maneuver_access_coverage_ratio active for Phase 3A access envelope
 optimization weights                    active for Phase 1 scoring
 optimization score breakdown            active in JSON report
 report aisles / stalls traceability      active in JSON report
 report selected_branches                active in JSON report
 report selected_connectors              active, includes removed and added stalls
 report traffic_graph validation          active in JSON report
+report maneuver_validation              active in JSON report
 report attempt graph rejection           active in JSON report
 diagnostics                             active as reporting structure
 ```

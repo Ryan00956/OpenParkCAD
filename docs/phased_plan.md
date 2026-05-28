@@ -370,6 +370,32 @@ Start with conservative approximations:
 - T-end stalls are modeled but may remain disabled,
 - invalid stalls are rejected with a reason.
 
+### Phase 3A: Conservative Stall Access Envelope
+
+The first maneuver slice is implemented as a conservative geometric access
+check, not as full swept-path simulation.
+
+Current rules:
+
+- Each stall must reference a serving aisle.
+- The validator finds the stall edge that faces its serving aisle.
+- A rectangular access envelope is projected from that edge into the serving
+  aisle.
+- `optimization.maneuver_access_depth` controls the envelope depth. It defaults
+  to one aisle width.
+- `optimization.maneuver_access_coverage_ratio` controls how much of the
+  envelope must be covered. It defaults to `0.95`.
+- The envelope must be covered by generated drivable aisle geometry.
+- The envelope must stay inside usable site area, so boundaries and obstacles
+  can invalidate it.
+- Invalid stalls are filtered before traffic graph validation and scoring.
+
+The report includes `maneuver_validation`, with checked stall count, invalid
+stall reasons, filtered stall ids, and access envelope coverage ratios.
+
+Phase 3A deliberately does not check steering arcs, swept paths, or turning
+radius. Those remain the next maneuver layer.
+
 ## Phase 4: Candidate Generation and Optimization
 
 ### Goal

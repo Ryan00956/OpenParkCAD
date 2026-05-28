@@ -67,6 +67,7 @@ def _write_report(layout, path: str) -> None:
         "selected_branches": layout.selected_branches,
         "selected_connectors": layout.selected_connectors,
         "score": layout.score,
+        "maneuver_validation": layout.maneuver_validation,
         "unsupported_phase1_inputs": layout.unsupported_phase1_inputs,
         "aisles": [
             {

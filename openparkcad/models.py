@@ -131,6 +131,7 @@ class LayoutResult:
     selected_connectors: list[dict[str, Any]] = field(default_factory=list)
     score: dict[str, float] = field(default_factory=dict)
     graph_validation: dict[str, Any] = field(default_factory=dict)
+    maneuver_validation: dict[str, Any] = field(default_factory=dict)
     unsupported_phase1_inputs: list[dict[str, str]] = field(default_factory=list)
 
     @property

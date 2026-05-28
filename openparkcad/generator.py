@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from openparkcad.maneuver_validation import apply_maneuver_filter
 from openparkcad.models import AngleAttempt, LayoutResult, SiteSpec
 from openparkcad.phase1_candidates import iter_phase1_candidates
 from openparkcad.phase1_support import phase1_unsupported_inputs
@@ -39,14 +40,16 @@ def generate_layout(site: SiteSpec) -> LayoutResult:
             best = layout
 
     if best is None:
-        return _with_graph_validation(
-            _with_score(
-                LayoutResult(
-                    site=site,
-                    stalls=[],
-                    generation_mode="phase1_main_aisle",
-                    attempts=attempts,
-                    unsupported_phase1_inputs=unsupported,
+        return _with_score(
+            _with_graph_validation(
+                apply_maneuver_filter(
+                    LayoutResult(
+                        site=site,
+                        stalls=[],
+                        generation_mode="phase1_main_aisle",
+                        attempts=attempts,
+                        unsupported_phase1_inputs=unsupported,
+                    )
                 )
             )
         )
@@ -68,6 +71,7 @@ def generate_layout(site: SiteSpec) -> LayoutResult:
         selected_branches=list(best.selected_branches),
         selected_connectors=list(best.selected_connectors),
         graph_validation=best.graph_validation,
+        maneuver_validation=best.maneuver_validation,
         unsupported_phase1_inputs=unsupported,
     )
     return _with_score(result)
@@ -84,7 +88,7 @@ def _with_graph_validation(layout: LayoutResult) -> LayoutResult:
 
 
 def _finalize_candidate(layout: LayoutResult) -> LayoutResult:
-    return _with_score(_with_graph_validation(layout))
+    return _with_score(_with_graph_validation(apply_maneuver_filter(layout)))
 
 
 def _graph_valid(layout: LayoutResult) -> bool:

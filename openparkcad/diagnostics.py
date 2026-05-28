@@ -39,7 +39,7 @@ def build_input_diagnostics(site: SiteSpec, layout: LayoutResult | None = None) 
         warnings.append("entrance-to-main-aisle connection is active; Phase 2 graph reachability is now reported")
     if site.vehicle:
         parsed_future_fields.append("vehicles.design_vehicle")
-        warnings.append("vehicle dimensions and turning radius are parsed but not enforced by maneuver checks yet")
+        warnings.append("vehicle dimensions are parsed; Phase 3A uses a conservative access envelope, but turning radius is not enforced yet")
     if site.site_features:
         parsed_future_fields.append("site_features")
         warnings.append("site_features are parsed but not used for clearance or collision checks yet")
@@ -54,8 +54,7 @@ def build_input_diagnostics(site: SiteSpec, layout: LayoutResult | None = None) 
     if site.aisle_selection_mode != "fixed":
         warnings.append("aisle selection modes beyond fixed are documented but not optimized yet")
     if site.constraints.get("maneuvering"):
-        parsed_future_fields.append("constraints.maneuvering")
-        warnings.append("maneuvering constraints are parsed but not enforced yet")
+        warnings.append("maneuvering constraints are partially active through the Phase 3A stall access envelope")
     if site.optimization:
         parsed_future_fields.append("optimization")
         warnings.append("optimization weights are active for Phase 1 scoring; candidate generation is still deliberately narrow")
@@ -97,6 +96,7 @@ def build_input_diagnostics(site: SiteSpec, layout: LayoutResult | None = None) 
             "enable_connectors": site.optimization.get("enable_connectors", True),
         },
         "score": layout.score if layout else {},
+        "maneuver_validation": layout.maneuver_validation if layout else None,
         "active_stall_type": asdict(site.stall),
         "unsupported_phase1_inputs": unsupported,
         "stall_access": _stall_access(layout),
@@ -165,9 +165,18 @@ def _constraint_status(site: SiteSpec, layout: LayoutResult | None) -> list[dict
             ),
         },
         {
+            "constraint": "stall maneuver access envelope",
+            "status": _maneuver_status(layout),
+            "note": (
+                "Phase 3A checks a conservative rectangular access envelope from each stall front into its serving aisle."
+                if _maneuver_status(layout) == "active"
+                else "Maneuver access envelope checks are only available after layout generation."
+            ),
+        },
+        {
             "constraint": "vehicle turning radius",
             "status": "future",
-            "note": "Vehicle data is parsed but swept path and turning checks are not implemented yet.",
+            "note": "Vehicle data is parsed but swept path and turning-radius checks are not implemented yet.",
         },
         {
             "constraint": "narrow two-way deadlock",
@@ -215,6 +224,7 @@ def _field_support(site: SiteSpec, layout: LayoutResult | None) -> dict[str, str
         "constraints.stall_to_aisle_association": "active" if _all_stalls_have_aisles(layout) else "future",
         "constraints.phase1_aisle_connectivity": "active" if _phase1_main_aisle_active(layout) else "future",
         "constraints.full_aisle_graph_reachability": _traffic_graph_status(layout),
+        "constraints.maneuver_access_envelope": _maneuver_status(layout),
         "constraints.turning_radius": "future",
         "constraints.swept_path": "future",
         "optimization.weights": "parsed_not_enforced" if site.optimization else "future",
@@ -271,3 +281,12 @@ def _traffic_graph_status(layout: LayoutResult | None) -> str:
     if not layout:
         return "future"
     return "active" if traffic_graph_summary(layout)["valid"] else "active_failed"
+
+
+def _maneuver_status(layout: LayoutResult | None) -> str:
+    if not layout:
+        return "future"
+    validation = layout.maneuver_validation
+    if not validation:
+        return "future"
+    return "active" if validation.get("valid") else "active_failed"

@@ -9,6 +9,7 @@ The current MVP uses Shapely for geometry and ezdxf for CAD output. It can:
 - draw diagnostic layers for entrances, fixed features, and pedestrian/fire reservations,
 - generate a conservative Phase 1 layout from an entrance-connected main aisle,
 - build a Phase 2A traffic graph from the generated aisles and stalls,
+- run a Phase 3A conservative stall access envelope check,
 - reserve an end turnaround pad,
 - avoid obstacles,
 - write a DXF file with CAD layers,
@@ -108,6 +109,20 @@ Phase 2B uses that graph validation as a hard candidate filter before scoring.
 Invalid candidates are skipped, and attempt diagnostics include `graph_valid`
 and `graph_errors`.
 
+Phase 3A adds a conservative maneuver-access check. For each generated stall,
+the solver finds the stall edge facing its serving aisle and projects a
+rectangular access envelope into the aisle. The envelope must be covered by
+drivable aisle geometry and stay inside the usable site area. Invalid stalls are
+filtered before graph validation and scoring. You can tune this first-pass check
+with:
+
+```json
+"optimization": {
+  "maneuver_access_depth": 6.0,
+  "maneuver_access_coverage_ratio": 0.95
+}
+```
+
 This is still conservative. It does not yet build arbitrary loops,
 intersections, narrow aisles, or swept-path turning checks.
 
@@ -170,8 +185,9 @@ All dimensions are interpreted as meters.
 
 This is still an early algorithmic kernel. It now builds a graph for generated
 aisles and stalls, but it does not yet generate arbitrary road networks,
-intersections, narrow aisles, turning swept paths, fire access validation,
-slopes, local code profiles, accessible stalls, or mixed parking modules.
+intersections, narrow aisles, steering swept paths, turning-radius validation,
+fire access validation, slopes, local code profiles, accessible stalls, or
+mixed parking modules.
 
 ## Design Notes
 
