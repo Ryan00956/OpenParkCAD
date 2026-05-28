@@ -943,7 +943,9 @@ constraints dead-end turnaround         active first
 constraints stall-to-aisle association  active first
 constraints phase1 aisle connectivity   active as simple parent links
 constraints full graph circulation      active for generated Phase 2A graph
-constraints maneuvering                 documented, future
+constraints maneuvering access envelope active as Phase 3A proxy
+constraints turning sweep proxy         active as Phase 3B proxy
+constraints exact turning radius        documented, future
 optimization heading_deltas_degrees     active for main aisle heading trials
 optimization entrance_offsets           active for entrance-width offset trials
 optimization branch_start_positions     active for perpendicular branch trials
@@ -954,6 +956,8 @@ optimization enable_connectors          active for same-side branch connectors
 optimization connector_throat_length    active for connector-side stall clearance
 optimization maneuver_access_depth      active for Phase 3A access envelope
 optimization maneuver_access_coverage_ratio active for Phase 3A access envelope
+optimization maneuver_turn_buffer_length active for Phase 3B turn proxy
+optimization maneuver_turn_coverage_ratio active for Phase 3B turn proxy
 optimization weights                    active for Phase 1 scoring
 optimization score breakdown            active in JSON report
 report aisles / stalls traceability      active in JSON report

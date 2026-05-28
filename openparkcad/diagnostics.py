@@ -39,7 +39,7 @@ def build_input_diagnostics(site: SiteSpec, layout: LayoutResult | None = None) 
         warnings.append("entrance-to-main-aisle connection is active; Phase 2 graph reachability is now reported")
     if site.vehicle:
         parsed_future_fields.append("vehicles.design_vehicle")
-        warnings.append("vehicle dimensions are parsed; Phase 3A uses a conservative access envelope, but turning radius is not enforced yet")
+        warnings.append("vehicle dimensions are parsed; Phase 3 uses conservative access and turning-sweep envelopes, but full turning radius is not enforced yet")
     if site.site_features:
         parsed_future_fields.append("site_features")
         warnings.append("site_features are parsed but not used for clearance or collision checks yet")
@@ -174,6 +174,15 @@ def _constraint_status(site: SiteSpec, layout: LayoutResult | None) -> list[dict
             ),
         },
         {
+            "constraint": "stall turning sweep proxy",
+            "status": _maneuver_status(layout),
+            "note": (
+                "Phase 3B checks an expanded aisle-side envelope near each stall front to approximate low-speed turning clearance."
+                if _maneuver_status(layout) == "active"
+                else "Turning sweep proxy checks are only available after layout generation."
+            ),
+        },
+        {
             "constraint": "vehicle turning radius",
             "status": "future",
             "note": "Vehicle data is parsed but swept path and turning-radius checks are not implemented yet.",
@@ -225,6 +234,7 @@ def _field_support(site: SiteSpec, layout: LayoutResult | None) -> dict[str, str
         "constraints.phase1_aisle_connectivity": "active" if _phase1_main_aisle_active(layout) else "future",
         "constraints.full_aisle_graph_reachability": _traffic_graph_status(layout),
         "constraints.maneuver_access_envelope": _maneuver_status(layout),
+        "constraints.turning_sweep_proxy": _maneuver_status(layout),
         "constraints.turning_radius": "future",
         "constraints.swept_path": "future",
         "optimization.weights": "parsed_not_enforced" if site.optimization else "future",

@@ -9,7 +9,7 @@ def test_phase3a_maneuver_validation_rejects_blocked_access_envelope():
     site = SiteSpec(
         name="blocked-access",
         boundary=[(0, 0), (20, 0), (20, 20), (0, 20)],
-        obstacles=[[(1.25, 4), (2.75, 4), (2.75, 5), (1.25, 5)]],
+        obstacles=[[(4.5, 4), (6.0, 4), (6.0, 5), (4.5, 5)]],
         stall=StallSpec(width=2.5, length=5.0, allowed_angles=(90.0,)),
         aisle_width=6.0,
         margin=0.0,
@@ -19,7 +19,7 @@ def test_phase3a_maneuver_validation_rejects_blocked_access_envelope():
         stalls=[
             ParkingStall(
                 id="P-001",
-                polygon=[(1, 6), (3.5, 6), (3.5, 11), (1, 11)],
+                polygon=[(4, 6), (6.5, 6), (6.5, 11), (4, 11)],
                 angle_degrees=90.0,
                 served_by_aisle_id="A-MAIN",
                 aisle_side="left",
@@ -95,7 +95,7 @@ def test_phase3a_filter_keeps_valid_access_envelopes():
         stalls=[
             ParkingStall(
                 id="P-001",
-                polygon=[(1, 6), (3.5, 6), (3.5, 11), (1, 11)],
+                polygon=[(4, 6), (6.5, 6), (6.5, 11), (4, 11)],
                 angle_degrees=90.0,
                 served_by_aisle_id="A-MAIN",
                 aisle_side="left",
@@ -115,3 +115,87 @@ def test_phase3a_filter_keeps_valid_access_envelopes():
 
     assert filtered.stall_count == 1
     assert filtered.maneuver_validation["valid"] is True
+
+
+def test_phase3b_turning_proxy_rejects_blocked_side_sweep():
+    site = SiteSpec(
+        name="blocked-turn-sweep",
+        boundary=[(0, 0), (20, 0), (20, 20), (0, 20)],
+        obstacles=[[(8.5, 2), (9.2, 2), (9.2, 4), (8.5, 4)]],
+        stall=StallSpec(width=2.5, length=5.0, allowed_angles=(90.0,)),
+        aisle_width=6.0,
+        margin=0.0,
+        optimization={
+            "maneuver_turn_buffer_length": 2.0,
+            "maneuver_turn_coverage_ratio": 0.98,
+        },
+    )
+    layout = LayoutResult(
+        site=site,
+        stalls=[
+            ParkingStall(
+                id="P-001",
+                polygon=[(5, 6), (7.5, 6), (7.5, 11), (5, 11)],
+                angle_degrees=90.0,
+                served_by_aisle_id="A-MAIN",
+                aisle_side="left",
+            )
+        ],
+        aisles=[
+            ParkingAisle(
+                id="A-MAIN",
+                polygon=[(0, 0), (10, 0), (10, 6), (0, 6)],
+                angle_degrees=90.0,
+                role="main",
+            )
+        ],
+    )
+
+    validation = validate_maneuvers(layout)
+
+    assert validation["valid"] is False
+    assert validation["turn_buffer_length"] == 2.0
+    assert validation["invalid_stalls"][0]["reason"] == "turning_sweep_hits_boundary_or_obstacle"
+
+
+def test_phase3b_turning_proxy_can_filter_generated_stalls_near_aisle_ends():
+    site = SiteSpec(
+        name="strict-turn-buffer",
+        boundary=[(0, 0), (24, 0), (24, 34), (0, 34)],
+        stall=StallSpec(width=2.5, length=5.0, allowed_angles=(90.0,)),
+        aisle_width=6.0,
+        margin=0.0,
+        entrances=[
+            EntranceSpec(
+                id="main",
+                mode="shared",
+                center=(12, 0),
+                width=7.0,
+                heading_degrees=90.0,
+            )
+        ],
+        aisle_classes=[
+            AisleClassSpec(
+                id="wide-two-way-no-cross",
+                width=6.0,
+                capacity="two_vehicle",
+                directionality="two_way",
+            )
+        ],
+        fixed_aisle_class="wide-two-way-no-cross",
+        optimization={
+            "heading_deltas_degrees": [0],
+            "entrance_offsets": [0],
+            "maneuver_turn_buffer_length": 8.0,
+            "maneuver_turn_coverage_ratio": 0.98,
+        },
+    )
+
+    layout = generate_layout(site)
+
+    assert layout.maneuver_validation["valid"] is True
+    assert layout.maneuver_validation["filtered_stall_count"] > 0
+    assert any(
+        item["reason"] == "turning_sweep_not_in_drivable_aisle"
+        for item in layout.maneuver_validation["pre_filter_invalid_stalls"]
+    )

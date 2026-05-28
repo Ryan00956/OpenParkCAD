@@ -396,6 +396,34 @@ stall reasons, filtered stall ids, and access envelope coverage ratios.
 Phase 3A deliberately does not check steering arcs, swept paths, or turning
 radius. Those remain the next maneuver layer.
 
+### Phase 3B: Conservative Turning Sweep Proxy
+
+Phase 3B adds a first approximation of low-speed turning clearance without
+claiming to simulate a vehicle path.
+
+Current rules:
+
+- The Phase 3A access envelope remains the hard front-clearance check.
+- A second envelope expands the stall-front access rectangle along the aisle
+  direction on both sides of the stall.
+- `optimization.maneuver_turn_buffer_length` controls this side expansion. By
+  default it uses a conservative value based on stall width, aisle width, and
+  vehicle swept-path margin when vehicle data is available.
+- `optimization.maneuver_turn_coverage_ratio` controls how much of the expanded
+  envelope must be covered. It defaults to the access-envelope coverage ratio.
+- The expanded envelope must be covered by drivable aisle geometry.
+- The expanded envelope must stay inside usable site area, so side obstacles,
+  end walls, and boundary clips can invalidate a stall even when its immediate
+  front access is clear.
+- Invalid stalls are filtered before traffic graph validation and scoring.
+
+The report includes `turn_buffer_length`,
+`minimum_turn_coverage_ratio`, and per-stall turn coverage ratios in
+`maneuver_validation`.
+
+Phase 3B is still a proxy. Full steering arcs, swept paths, and exact minimum
+turning radius checks remain future work.
+
 ## Phase 4: Candidate Generation and Optimization
 
 ### Goal

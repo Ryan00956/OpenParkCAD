@@ -47,21 +47,32 @@ def validate_maneuvers(layout: LayoutResult) -> dict[str, Any]:
             continue
 
         envelope = envelope_result["envelope"]
+        turn_proxy = envelope_result["turn_proxy"]
         drivable_ratio = _coverage_ratio(envelope, drivable)
         usable_ratio = _coverage_ratio(envelope, usable)
+        turn_drivable_ratio = _coverage_ratio(turn_proxy, drivable)
+        turn_usable_ratio = _coverage_ratio(turn_proxy, usable)
         min_ratio = _minimum_coverage_ratio(layout.site)
+        min_turn_ratio = _minimum_turn_coverage_ratio(layout.site)
         record = {
             "stall_id": stall.id,
             "served_by_aisle_id": stall.served_by_aisle_id,
             "drivable_coverage_ratio": drivable_ratio,
             "usable_coverage_ratio": usable_ratio,
+            "turn_drivable_coverage_ratio": turn_drivable_ratio,
+            "turn_usable_coverage_ratio": turn_usable_ratio,
             "depth": _access_depth(layout.site),
+            "turn_buffer_length": _turn_buffer_length(layout.site),
         }
         envelopes.append(record)
         if drivable_ratio + 1e-9 < min_ratio:
             invalid.append({**record, "reason": "access_envelope_not_in_drivable_aisle"})
         elif usable_ratio + 1e-9 < min_ratio:
             invalid.append({**record, "reason": "access_envelope_hits_boundary_or_obstacle"})
+        elif turn_drivable_ratio + 1e-9 < min_turn_ratio:
+            invalid.append({**record, "reason": "turning_sweep_not_in_drivable_aisle"})
+        elif turn_usable_ratio + 1e-9 < min_turn_ratio:
+            invalid.append({**record, "reason": "turning_sweep_hits_boundary_or_obstacle"})
 
     return {
         "valid": not invalid,
@@ -69,6 +80,8 @@ def validate_maneuvers(layout: LayoutResult) -> dict[str, Any]:
         "invalid_stalls": invalid,
         "access_depth": _access_depth(layout.site),
         "minimum_coverage_ratio": _minimum_coverage_ratio(layout.site),
+        "turn_buffer_length": _turn_buffer_length(layout.site),
+        "minimum_turn_coverage_ratio": _minimum_turn_coverage_ratio(layout.site),
         "envelopes": envelopes,
     }
 
@@ -85,10 +98,19 @@ def _access_envelope(site: SiteSpec, stall: ParkingStall, aisle_by_id: dict[str,
     if edge is None:
         return {"envelope": None, "reason": "front_access_edge_not_found"}
 
-    envelope = _edge_access_rectangle(edge, stall_polygon, aisle, _access_depth(site))
+    envelope = _edge_access_rectangle(edge, stall_polygon, aisle, _access_depth(site), extra_along_edge=0.0)
     if envelope is None or envelope.area <= 1e-9:
         return {"envelope": None, "reason": "access_envelope_not_possible"}
-    return {"envelope": envelope, "reason": "ok"}
+    turn_proxy = _edge_access_rectangle(
+        edge,
+        stall_polygon,
+        aisle,
+        _access_depth(site),
+        extra_along_edge=_turn_buffer_length(site),
+    )
+    if turn_proxy is None or turn_proxy.area <= 1e-9:
+        return {"envelope": None, "reason": "turning_sweep_not_possible"}
+    return {"envelope": envelope, "turn_proxy": turn_proxy, "reason": "ok"}
 
 
 def _front_edge(stall: ShapelyPolygon, aisle: ShapelyPolygon, target_width: float) -> LineString | None:
@@ -108,7 +130,13 @@ def _front_edge(stall: ShapelyPolygon, aisle: ShapelyPolygon, target_width: floa
     return candidates[0][3]
 
 
-def _edge_access_rectangle(edge: LineString, stall: ShapelyPolygon, aisle: ShapelyPolygon, depth: float) -> ShapelyPolygon | None:
+def _edge_access_rectangle(
+    edge: LineString,
+    stall: ShapelyPolygon,
+    aisle: ShapelyPolygon,
+    depth: float,
+    extra_along_edge: float,
+) -> ShapelyPolygon | None:
     coords = list(edge.coords)
     if len(coords) < 2 or depth <= 0:
         return None
@@ -134,9 +162,13 @@ def _edge_access_rectangle(edge: LineString, stall: ShapelyPolygon, aisle: Shape
             item[0] * away_from_stall[0] + item[1] * away_from_stall[1],
         ),
     )
-    p3 = (p2[0] + normal[0] * depth, p2[1] + normal[1] * depth)
-    p4 = (p1[0] + normal[0] * depth, p1[1] + normal[1] * depth)
-    return ShapelyPolygon([p1, p2, p3, p4])
+    tangent = (dx / length, dy / length)
+    extra = max(extra_along_edge, 0.0)
+    q1 = (p1[0] - tangent[0] * extra, p1[1] - tangent[1] * extra)
+    q2 = (p2[0] + tangent[0] * extra, p2[1] + tangent[1] * extra)
+    q3 = (q2[0] + normal[0] * depth, q2[1] + normal[1] * depth)
+    q4 = (q1[0] + normal[0] * depth, q1[1] + normal[1] * depth)
+    return ShapelyPolygon([q1, q2, q3, q4])
 
 
 def _coverage_ratio(envelope: ShapelyPolygon, area) -> float:
@@ -154,12 +186,33 @@ def _access_depth(site: SiteSpec) -> float:
     return max(value, 0.0)
 
 
+def _turn_buffer_length(site: SiteSpec) -> float:
+    default = min(site.aisle_width / 2, site.stall.width)
+    if site.vehicle:
+        default = min(site.aisle_width / 2, max(site.vehicle.width, site.stall.width) + site.vehicle.swept_path_margin)
+    raw = site.optimization.get("maneuver_turn_buffer_length", default)
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        value = default
+    return max(value, 0.0)
+
+
 def _minimum_coverage_ratio(site: SiteSpec) -> float:
     raw = site.optimization.get("maneuver_access_coverage_ratio", 0.95)
     try:
         value = float(raw)
     except (TypeError, ValueError):
         value = 0.95
+    return min(max(value, 0.0), 1.0)
+
+
+def _minimum_turn_coverage_ratio(site: SiteSpec) -> float:
+    raw = site.optimization.get("maneuver_turn_coverage_ratio", _minimum_coverage_ratio(site))
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        value = _minimum_coverage_ratio(site)
     return min(max(value, 0.0), 1.0)
 
 

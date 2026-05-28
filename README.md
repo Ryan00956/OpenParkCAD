@@ -113,18 +113,24 @@ Phase 3A adds a conservative maneuver-access check. For each generated stall,
 the solver finds the stall edge facing its serving aisle and projects a
 rectangular access envelope into the aisle. The envelope must be covered by
 drivable aisle geometry and stay inside the usable site area. Invalid stalls are
-filtered before graph validation and scoring. You can tune this first-pass check
-with:
+filtered before graph validation and scoring.
+
+Phase 3B adds a conservative turning-sweep proxy. It expands that stall-front
+envelope along the aisle direction on both sides, so side obstacles or aisle-end
+clips can invalidate a stall even when the immediate front rectangle is clear.
+You can tune these maneuver checks with:
 
 ```json
 "optimization": {
   "maneuver_access_depth": 6.0,
-  "maneuver_access_coverage_ratio": 0.95
+  "maneuver_access_coverage_ratio": 0.95,
+  "maneuver_turn_buffer_length": 2.5,
+  "maneuver_turn_coverage_ratio": 0.95
 }
 ```
 
 This is still conservative. It does not yet build arbitrary loops,
-intersections, narrow aisles, or swept-path turning checks.
+intersections, narrow aisles, exact steering arcs, or swept-path turning checks.
 
 ## Input Format
 
