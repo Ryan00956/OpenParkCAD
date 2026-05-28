@@ -1,8 +1,10 @@
 from shapely.geometry import Polygon as ShapelyPolygon
 
+from openparkcad import diagnostics
 from openparkcad.diagnostics import build_input_diagnostics
 from openparkcad.generator import generate_layout
 from openparkcad.models import AisleClassSpec, EntranceSpec, SiteSpec, StallSpec
+from openparkcad.phase1_support import phase1_unsupported_inputs
 
 
 def _phase1_site() -> SiteSpec:
@@ -88,6 +90,42 @@ def test_phase1_layout_requires_supported_wide_two_way_aisle():
     assert layout.aisles == []
     assert layout.unsupported_phase1_inputs
     assert layout.unsupported_phase1_inputs[0]["field"] == "aisles.classes.narrow-one-way"
+
+
+def test_phase2b_rejects_candidates_without_exit_path():
+    site = SiteSpec(
+        name="entry-only",
+        boundary=[(0, 0), (30, 0), (30, 34), (0, 34)],
+        stall=StallSpec(width=2.5, length=5.0, allowed_angles=(90.0,)),
+        aisle_width=6.0,
+        margin=0.0,
+        entrances=[
+            EntranceSpec(
+                id="entry",
+                mode="entry_only",
+                center=(15, 0),
+                width=8.0,
+                heading_degrees=90.0,
+            )
+        ],
+        aisle_classes=[
+            AisleClassSpec(
+                id="wide-two-way-no-cross",
+                width=6.0,
+                capacity="two_vehicle",
+                directionality="two_way",
+            )
+        ],
+        fixed_aisle_class="wide-two-way-no-cross",
+        optimization={"heading_deltas_degrees": [0], "entrance_offsets": [0]},
+    )
+
+    layout = generate_layout(site)
+
+    assert layout.stall_count == 0
+    assert layout.attempts
+    assert layout.attempts[0].graph_valid is False
+    assert layout.attempts[0].graph_errors == ["stalls_without_exit_path"]
 
 
 def test_phase1_reports_unsupported_stall_types_clearly():
@@ -268,3 +306,49 @@ def test_phase1_branch_attempts_report_candidate_reasons():
 
     assert layout.attempts[0].branch_candidates
     assert {item["reason"] for item in layout.attempts[0].branch_candidates}
+
+
+def test_diagnostics_reads_phase1_support_without_generator_dependency():
+    assert diagnostics.phase1_unsupported_inputs is phase1_unsupported_inputs
+
+
+def test_generate_layout_preserves_branch_toggle_pipeline_metadata():
+    common = dict(
+        name="branch-toggle",
+        boundary=[(0, 0), (60, 0), (60, 50), (0, 50)],
+        stall=StallSpec(width=2.5, length=5.0, allowed_angles=(90.0,)),
+        aisle_width=6.0,
+        margin=0.0,
+        entrances=[
+            EntranceSpec(
+                id="main",
+                mode="shared",
+                center=(30, 0),
+                width=8.0,
+                heading_degrees=90.0,
+            )
+        ],
+        aisle_classes=[
+            AisleClassSpec(
+                id="wide-two-way-no-cross",
+                width=6.0,
+                capacity="two_vehicle",
+                directionality="two_way",
+            )
+        ],
+        fixed_aisle_class="wide-two-way-no-cross",
+    )
+    disabled = SiteSpec(**common, optimization={"heading_deltas_degrees": [0], "entrance_offsets": [0], "enable_branches": False})
+    enabled = SiteSpec(**common, optimization={"heading_deltas_degrees": [0], "entrance_offsets": [0], "branch_start_positions": [24]})
+
+    disabled_layout = generate_layout(disabled)
+    enabled_layout = generate_layout(enabled)
+
+    assert disabled_layout.selected_branch_side is None
+    assert disabled_layout.graph_validation["valid"] is True
+    assert disabled_layout.attempts[0].branch_candidates == []
+    assert enabled_layout.selected_branch_side in {"left", "right"}
+    assert enabled_layout.graph_validation["valid"] is True
+    assert enabled_layout.attempts[0].graph_valid is True
+    assert enabled_layout.attempts[0].branch_candidates
+    assert enabled_layout.stall_count > disabled_layout.stall_count

@@ -9,6 +9,7 @@ from openparkcad.exporter_dxf import write_dxf
 from openparkcad.exporter_svg import write_svg
 from openparkcad.generator import generate_layout
 from openparkcad.models import site_from_dict
+from openparkcad.traffic_graph import traffic_graph_report
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -92,6 +93,8 @@ def _write_report(layout, path: str) -> None:
                 "branch_start_u": attempt.branch_start_u,
                 "branch_length": attempt.branch_length,
                 "branch_candidates": attempt.branch_candidates,
+                "graph_valid": attempt.graph_valid,
+                "graph_errors": attempt.graph_errors,
                 "stall_count": attempt.stall_count,
             }
             for attempt in layout.attempts
@@ -101,6 +104,7 @@ def _write_report(layout, path: str) -> None:
             "length": layout.site.stall.length,
         },
         "aisle_width": layout.site.aisle_width,
+        "traffic_graph": traffic_graph_report(layout),
         "input_diagnostics": build_input_diagnostics(layout.site, layout),
     }
     target.write_text(json.dumps(data, indent=2), encoding="utf-8")

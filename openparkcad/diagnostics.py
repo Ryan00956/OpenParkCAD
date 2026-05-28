@@ -3,8 +3,9 @@ from __future__ import annotations
 from dataclasses import asdict
 from typing import Any
 
-from openparkcad.generator import phase1_unsupported_inputs
 from openparkcad.models import LayoutResult, SiteSpec
+from openparkcad.phase1_support import phase1_unsupported_inputs
+from openparkcad.traffic_graph import traffic_graph_summary
 
 
 def build_input_diagnostics(site: SiteSpec, layout: LayoutResult | None = None) -> dict[str, Any]:
@@ -35,7 +36,7 @@ def build_input_diagnostics(site: SiteSpec, layout: LayoutResult | None = None) 
         parsed_future_fields.append("entrances")
         warnings.append("entrances are parsed and drawn, but aisle connectivity to entrances is not enforced yet")
     elif phase1_active:
-        warnings.append("entrance-to-main-aisle connection is active; full aisle graph reachability is still future work")
+        warnings.append("entrance-to-main-aisle connection is active; Phase 2 graph reachability is now reported")
     if site.vehicle:
         parsed_future_fields.append("vehicles.design_vehicle")
         warnings.append("vehicle dimensions and turning radius are parsed but not enforced by maneuver checks yet")
@@ -95,6 +96,7 @@ def build_input_diagnostics(site: SiteSpec, layout: LayoutResult | None = None) 
         "unsupported_phase1_inputs": unsupported,
         "stall_access": _stall_access(layout),
         "aisle_connectivity": _aisle_connectivity(layout),
+        "traffic_graph": traffic_graph_summary(layout) if layout else None,
     }
 
 
@@ -150,8 +152,12 @@ def _constraint_status(site: SiteSpec, layout: LayoutResult | None) -> list[dict
         },
         {
             "constraint": "full aisle graph reachability",
-            "status": "future",
-            "note": "Phase 1 records simple parent links only; full graph reachability starts in Phase 2.",
+            "status": _traffic_graph_status(layout),
+            "note": (
+                "Phase 2A validates generated aisle and stall reachability from the traffic graph."
+                if _traffic_graph_status(layout) == "active"
+                else "Traffic graph reachability is only available after layout generation."
+            ),
         },
         {
             "constraint": "vehicle turning radius",
@@ -202,7 +208,7 @@ def _field_support(site: SiteSpec, layout: LayoutResult | None) -> dict[str, str
         "constraints.dead_end_turnaround": "active" if _phase1_main_aisle_active(layout) else "future",
         "constraints.stall_to_aisle_association": "active" if _all_stalls_have_aisles(layout) else "future",
         "constraints.phase1_aisle_connectivity": "active" if _phase1_main_aisle_active(layout) else "future",
-        "constraints.full_aisle_graph_reachability": "future",
+        "constraints.full_aisle_graph_reachability": _traffic_graph_status(layout),
         "constraints.turning_radius": "future",
         "constraints.swept_path": "future",
         "optimization.weights": "parsed_not_enforced" if site.optimization else "future",
@@ -252,3 +258,9 @@ def _aisle_connectivity(layout: LayoutResult | None) -> list[dict[str, str | Non
         }
         for aisle in layout.aisles
     ]
+
+
+def _traffic_graph_status(layout: LayoutResult | None) -> str:
+    if not layout:
+        return "future"
+    return "active" if traffic_graph_summary(layout)["valid"] else "active_failed"

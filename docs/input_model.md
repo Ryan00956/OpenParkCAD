@@ -942,7 +942,7 @@ constraints entrance-to-main-aisle      active first
 constraints dead-end turnaround         active first
 constraints stall-to-aisle association  active first
 constraints phase1 aisle connectivity   active as simple parent links
-constraints full graph circulation      future
+constraints full graph circulation      active for generated Phase 2A graph
 constraints maneuvering                 documented, future
 optimization heading_deltas_degrees     active for main aisle heading trials
 optimization entrance_offsets           active for entrance-width offset trials
@@ -951,6 +951,8 @@ optimization branch_start_step          active for branch start auto-sampling
 optimization weights                    active for Phase 1 scoring
 optimization score breakdown            active in JSON report
 report aisles / stalls traceability      active in JSON report
+report traffic_graph validation          active in JSON report
+report attempt graph rejection           active in JSON report
 diagnostics                             active as reporting structure
 ```
 

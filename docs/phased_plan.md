@@ -219,6 +219,50 @@ Core graph concepts:
 - isolated aisle fragments are invalid,
 - dead-end branches are detected and reported.
 
+### Phase 2A: Graph Validation From Existing Layouts
+
+The first Phase 2 slice does not generate new road networks. It converts the
+current Phase 1 result into a traffic graph and validates it.
+
+Implemented graph objects:
+
+- `TrafficNode` for entrances and generated aisle pieces,
+- `TrafficEdge` for entrance-to-aisle and parent-aisle connections,
+- `StallAccess` for stall-to-aisle access,
+- `TrafficGraph` as the container,
+- `traffic_graph_report()` for JSON report output.
+
+Implemented checks:
+
+- generated aisles are reachable from an entry-capable entrance,
+- generated stalls reference existing aisles,
+- generated stalls are reachable from an entry-capable entrance,
+- generated stalls have a path back to an exit-capable entrance,
+- isolated aisle fragments are reported invalid,
+- dead ends with turnaround pads are reported as allowed.
+
+The JSON report includes `traffic_graph.nodes`, `traffic_graph.edges`,
+`traffic_graph.stall_access`, and `traffic_graph.validation`.
+
+### Phase 2B: Use The Graph To Reject Candidates
+
+The generator now calls the graph validator before accepting a candidate into
+the score comparison:
+
+```text
+candidate layout
+  -> build traffic graph
+  -> validate reachability and exit path
+  -> reject invalid candidate
+  -> score valid candidate
+```
+
+Attempt diagnostics include `graph_valid` and `graph_errors`, so an invalid
+candidate is rejected with an explanation rather than disappearing silently.
+
+This creates the foundation for multiple branches, loops, intersections, and
+eventually one-way aisle networks.
+
 ## Phase 3: Maneuver Validity
 
 ### Goal

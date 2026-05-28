@@ -107,6 +107,8 @@ class AngleAttempt:
     branch_start_u: float | None = None
     branch_length: float | None = None
     branch_candidates: list[dict[str, Any]] = field(default_factory=list)
+    graph_valid: bool = True
+    graph_errors: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -125,6 +127,7 @@ class LayoutResult:
     selected_branch_start_u: float | None = None
     selected_branch_length: float | None = None
     score: dict[str, float] = field(default_factory=dict)
+    graph_validation: dict[str, Any] = field(default_factory=dict)
     unsupported_phase1_inputs: list[dict[str, str]] = field(default_factory=list)
 
     @property

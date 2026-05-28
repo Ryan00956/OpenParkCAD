@@ -8,6 +8,7 @@ The current MVP uses Shapely for geometry and ezdxf for CAD output. It can:
 - read the Phase 0+ JSON input model,
 - draw diagnostic layers for entrances, fixed features, and pedestrian/fire reservations,
 - generate a conservative Phase 1 layout from an entrance-connected main aisle,
+- build a Phase 2A traffic graph from the generated aisles and stalls,
 - reserve an end turnaround pad,
 - avoid obstacles,
 - write a DXF file with CAD layers,
@@ -81,6 +82,15 @@ For Phase 1 explainability, the report also lists:
 - every generated stall with the aisle that serves it,
 - unsupported Phase 1 input choices and the reason they were not generated.
 
+The report now includes a Phase 2A `traffic_graph` section. It validates whether
+generated aisles are reachable from an entrance, whether stalls reference
+existing aisles, whether stalls have an exit path, and whether dead ends are
+covered by turnaround pads.
+
+Phase 2B uses that graph validation as a hard candidate filter before scoring.
+Invalid candidates are skipped, and attempt diagnostics include `graph_valid`
+and `graph_errors`.
+
 This is still conservative. It does not yet build loops, intersections, narrow
 aisles, or swept-path turning checks.
 
@@ -141,10 +151,10 @@ All dimensions are interpreted as meters.
 
 ## Current Limitations
 
-This is still an early algorithmic kernel. It now connects a straight main aisle
-to an entrance and reserves an end turnaround, but it does not yet build full
-aisle graphs, intersections, turning swept paths, fire access validation, slopes,
-local code profiles, accessible stalls, or mixed parking modules.
+This is still an early algorithmic kernel. It now builds a graph for generated
+aisles and stalls, but it does not yet generate loops, intersections, narrow
+aisles, turning swept paths, fire access validation, slopes, local code
+profiles, accessible stalls, or mixed parking modules.
 
 ## Design Notes
 
