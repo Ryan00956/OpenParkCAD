@@ -274,6 +274,54 @@ def test_phase1_layout_can_add_single_branch_candidate():
     assert any(aisle.id == "A-BRANCH-001" for aisle in branch_layout.aisles)
 
 
+def test_phase2c_layout_can_select_multiple_branch_candidates():
+    site = SiteSpec(
+        name="multi-branch",
+        boundary=[(0, 0), (90, 0), (90, 70), (0, 70)],
+        stall=StallSpec(width=2.5, length=5.0, allowed_angles=(90.0,)),
+        aisle_width=6.0,
+        margin=0.0,
+        entrances=[
+            EntranceSpec(
+                id="main",
+                mode="shared",
+                center=(45, 0),
+                width=8.0,
+                heading_degrees=90.0,
+            )
+        ],
+        aisle_classes=[
+            AisleClassSpec(
+                id="wide-two-way-no-cross",
+                width=6.0,
+                capacity="two_vehicle",
+                directionality="two_way",
+            )
+        ],
+        fixed_aisle_class="wide-two-way-no-cross",
+        optimization={
+            "heading_deltas_degrees": [0],
+            "entrance_offsets": [0],
+            "branch_start_positions": [18, 32, 46],
+            "max_branches": 2,
+            "weights": {
+                "stall_count": 100,
+                "aisle_area": 0,
+                "dead_end_length": 0,
+                "branch_count": 0,
+            },
+        },
+    )
+
+    layout = generate_layout(site)
+
+    assert [branch["id"] for branch in layout.selected_branches] == ["A-BRANCH-001", "A-BRANCH-002"]
+    assert layout.score["branch_count"] == 2.0
+    assert layout.graph_validation["valid"] is True
+    assert {"A-BRANCH-001", "A-BRANCH-002"} <= {stall.served_by_aisle_id for stall in layout.stalls}
+    assert any(item["reason"] == "branch_overlaps_existing_layout" for item in layout.attempts[0].branch_candidates)
+
+
 def test_phase1_branch_attempts_report_candidate_reasons():
     site = SiteSpec(
         name="branch-report",

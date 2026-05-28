@@ -263,6 +263,34 @@ candidate is rejected with an explanation rather than disappearing silently.
 This creates the foundation for multiple branches, loops, intersections, and
 eventually one-way aisle networks.
 
+### Phase 2C: Limited Multi-Branch Candidates
+
+The generator can now add more than one perpendicular branch while still using
+the Phase 2 graph as a hard validity gate.
+
+Current rules:
+
+- `optimization.max_branches` limits how many branches may be selected.
+- The default maximum is `2`.
+- Branch start positions still come from `optimization.branch_start_positions`
+  or automatic sampling with `optimization.branch_start_step`.
+- Each added branch receives a stable id such as `A-BRANCH-001`.
+- Every branch has its own turnaround pad.
+- A new branch may overlap the main aisle at its junction.
+- A new branch is rejected if it overlaps an existing branch, turnaround, or
+  branch-served stall.
+- Every added branch must pass traffic graph validation.
+- Every added branch must improve the score before it is kept.
+
+The report preserves the old single-branch summary fields for compatibility and
+adds `selected_branches` for the full selected branch list. Candidate diagnostics
+may include:
+
+- `branch_overlaps_existing_layout`,
+- `branch_invalid_traffic_graph`,
+- `branch_does_not_improve_score`,
+- `branch_improves_stall_count`.
+
 ## Phase 3: Maneuver Validity
 
 ### Goal

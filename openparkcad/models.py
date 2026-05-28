@@ -126,6 +126,7 @@ class LayoutResult:
     selected_branch_side: str | None = None
     selected_branch_start_u: float | None = None
     selected_branch_length: float | None = None
+    selected_branches: list[dict[str, Any]] = field(default_factory=list)
     score: dict[str, float] = field(default_factory=dict)
     graph_validation: dict[str, Any] = field(default_factory=dict)
     unsupported_phase1_inputs: list[dict[str, str]] = field(default_factory=list)

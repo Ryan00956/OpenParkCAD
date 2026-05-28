@@ -65,6 +65,7 @@ def generate_layout(site: SiteSpec) -> LayoutResult:
         selected_branch_side=best.selected_branch_side,
         selected_branch_start_u=best.selected_branch_start_u,
         selected_branch_length=best.selected_branch_length,
+        selected_branches=list(best.selected_branches),
         graph_validation=best.graph_validation,
         unsupported_phase1_inputs=unsupported,
     )

@@ -46,21 +46,25 @@ It tries a small set of heading offsets around the entrance direction and a few
 parallel offsets inside the entrance width, then keeps the legal main-aisle
 layout with the most stalls.
 
-It may also add one perpendicular branch from the main aisle. The branch must fit
-inside the usable site, connect to the main aisle, and reserve its own end
-turnaround.
+It may also add multiple perpendicular branches from the main aisle. Each branch
+must fit inside the usable site, connect to the main aisle, avoid conflicts with
+existing branch geometry, pass traffic graph validation, improve the score, and
+reserve its own end turnaround.
 
 Branch start positions are auto-sampled by default. You can also control the
 sampling with:
 
 ```json
 "optimization": {
-  "branch_start_step": 2.5
+  "branch_start_step": 2.5,
+  "max_branches": 2
 }
 ```
 
 The report includes branch candidate reasons such as
-`branch_too_short_for_turnaround` and `branch_does_not_improve_stall_count`.
+`branch_too_short_for_turnaround`, `branch_overlaps_existing_layout`, and
+`branch_does_not_improve_score`. Selected branches are listed in
+`selected_branches`.
 
 Layouts are selected by an explainable score, not only by stall count:
 

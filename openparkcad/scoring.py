@@ -97,7 +97,7 @@ def _weights_for_site(site: SiteSpec) -> ScoreWeights:
 
 def _metrics(layout: LayoutResult) -> dict[str, float]:
     aisle_area = sum(ShapelyPolygon(aisle.polygon).area for aisle in layout.aisles)
-    branch_count = 1.0 if layout.selected_branch_side else 0.0
+    branch_count = float(len([aisle for aisle in layout.aisles if aisle.role == "branch"]))
     dead_end_length = sum(_dead_end_lengths(layout))
     return {
         "stall_count": float(layout.stall_count),
@@ -115,8 +115,12 @@ def _dead_end_lengths(layout: LayoutResult) -> list[float]:
         main = next((aisle for aisle in layout.aisles if aisle.id == "A-MAIN"), None)
         if main:
             lengths.append(_long_side_length(main.polygon))
-    if layout.selected_branch_length:
+    if layout.selected_branch_length and not layout.selected_branches:
         lengths.append(layout.selected_branch_length)
+    for branch in layout.selected_branches:
+        length = branch.get("length")
+        if isinstance(length, int | float):
+            lengths.append(float(length))
     return lengths
 
 

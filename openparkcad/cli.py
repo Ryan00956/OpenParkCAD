@@ -64,6 +64,7 @@ def _write_report(layout, path: str) -> None:
             "start_u": layout.selected_branch_start_u,
             "length": layout.selected_branch_length,
         },
+        "selected_branches": layout.selected_branches,
         "score": layout.score,
         "unsupported_phase1_inputs": layout.unsupported_phase1_inputs,
         "aisles": [

@@ -209,12 +209,32 @@ def _with_best_branch(
 
     best = base
     branch_candidates: list[dict[str, object]] = []
-    for branch_u in _branch_start_positions(site, main_aisle_length):
-        for side in ("left", "right"):
-            candidate, diagnostic = _branch_layout(site, available, entrance, heading_degrees, base, branch_u, side, finalize_layout, graph_valid)
-            branch_candidates.append(diagnostic)
-            if candidate and graph_valid(candidate) and score_total(candidate) > score_total(best):
-                best = candidate
+    max_branches = _max_branches(site)
+    for iteration in range(1, max_branches + 1):
+        round_best = best
+        for branch_u in _branch_start_positions(site, main_aisle_length):
+            for side in ("left", "right"):
+                branch_index = _next_branch_index(best)
+                candidate, diagnostic = _branch_layout(
+                    site,
+                    available,
+                    entrance,
+                    heading_degrees,
+                    best,
+                    branch_u,
+                    side,
+                    branch_index,
+                    finalize_layout,
+                    graph_valid,
+                    score_total,
+                )
+                diagnostic["iteration"] = iteration
+                branch_candidates.append(diagnostic)
+                if candidate and graph_valid(candidate) and score_total(candidate) > score_total(round_best):
+                    round_best = candidate
+        if round_best is best:
+            break
+        best = round_best
     return best, branch_candidates
 
 
@@ -226,11 +246,15 @@ def _branch_layout(
     base: LayoutResult,
     branch_u: float,
     side: str,
+    branch_index: int,
     finalize_layout: FinalizeLayout,
     graph_valid: GraphValid,
+    score_total: LayoutScoreTotal,
 ) -> tuple[LayoutResult | None, dict[str, object]]:
+    branch_id = f"A-BRANCH-{branch_index:03d}"
     branch_length = _max_clear_branch_length(site, available, entrance, heading_degrees, branch_u, side)
     diagnostic: dict[str, object] = {
+        "branch_id": branch_id,
         "side": side,
         "start_u": branch_u,
         "length": branch_length,
@@ -248,6 +272,11 @@ def _branch_layout(
     if not available.covers(branch_drivable):
         diagnostic["reason"] = "branch_geometry_outside_usable_area"
         return None, diagnostic
+    conflict = _branch_conflict(base, branch_drivable)
+    if conflict:
+        diagnostic["reason"] = "branch_overlaps_existing_layout"
+        diagnostic["conflict_id"] = conflict
+        return None, diagnostic
 
     kept_main_stalls = [
         stall for stall in base.stalls if not area_overlaps(ShapelyPolygon(stall.polygon), branch_drivable)
@@ -264,6 +293,7 @@ def _branch_layout(
         heading_degrees,
         branch_u,
         side,
+        branch_id,
         start_t=site.aisle_width,
         end_t=branch_length - site.aisle_width,
         occupied=occupied,
@@ -272,20 +302,30 @@ def _branch_layout(
     stalls = _renumber_stalls(kept_main_stalls + branch_stalls)
     aisles = list(base.aisles) + [
         ParkingAisle(
-            id="A-BRANCH-001",
+            id=branch_id,
             polygon=polygon_points(branch_aisle),
             angle_degrees=heading_degrees + (90 if side == "left" else -90),
             role="branch",
             parent_aisle_id="A-MAIN",
         ),
         ParkingAisle(
-            id="A-BRANCH-001-TURNAROUND",
+            id=f"{branch_id}-TURNAROUND",
             polygon=polygon_points(branch_turnaround),
             angle_degrees=heading_degrees + (90 if side == "left" else -90),
             role="turnaround",
-            parent_aisle_id="A-BRANCH-001",
+            parent_aisle_id=branch_id,
         ),
     ]
+    selected_branches = [
+        *base.selected_branches,
+        {
+            "id": branch_id,
+            "side": side,
+            "start_u": branch_u,
+            "length": branch_length,
+        },
+    ]
+    first_branch = selected_branches[0]
     result = finalize_layout(
         LayoutResult(
             site=site,
@@ -297,9 +337,10 @@ def _branch_layout(
             selected_heading_degrees=base.selected_heading_degrees,
             selected_heading_delta_degrees=base.selected_heading_delta_degrees,
             selected_entrance_offset=base.selected_entrance_offset,
-            selected_branch_side=side,
-            selected_branch_start_u=branch_u,
-            selected_branch_length=branch_length,
+            selected_branch_side=str(first_branch["side"]),
+            selected_branch_start_u=float(first_branch["start_u"]),
+            selected_branch_length=float(first_branch["length"]),
+            selected_branches=selected_branches,
             unsupported_phase1_inputs=base.unsupported_phase1_inputs,
         )
     )
@@ -309,8 +350,8 @@ def _branch_layout(
     if not graph_valid(result):
         diagnostic["reason"] = "branch_invalid_traffic_graph"
         return result, diagnostic
-    if result.stall_count <= base.stall_count:
-        diagnostic["reason"] = "branch_does_not_improve_stall_count"
+    if score_total(result) <= score_total(base):
+        diagnostic["reason"] = "branch_does_not_improve_score"
         return result, diagnostic
     diagnostic["reason"] = "branch_improves_stall_count"
     return result, diagnostic
@@ -323,6 +364,7 @@ def _stalls_along_branch(
     heading_degrees: float,
     branch_u: float,
     side: str,
+    branch_id: str,
     start_t: float,
     end_t: float,
     occupied,
@@ -357,7 +399,7 @@ def _stalls_along_branch(
                         id=stall_id,
                         polygon=polygon_points(stall),
                         angle_degrees=heading_degrees + (90 if side == "left" else -90),
-                        served_by_aisle_id="A-BRANCH-001",
+                        served_by_aisle_id=branch_id,
                         aisle_side=stall_side,
                     )
                 )
@@ -436,6 +478,34 @@ def _branch_start_positions(site: SiteSpec, main_aisle_length: float) -> tuple[f
     positions.append(midpoint)
     positions.append(round(max_u, 6))
     return tuple(sorted(set(positions)))
+
+
+def _max_branches(site: SiteSpec) -> int:
+    raw = site.optimization.get("max_branches", 2)
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        value = 2
+    return max(value, 0)
+
+
+def _next_branch_index(layout: LayoutResult) -> int:
+    existing = [aisle for aisle in layout.aisles if aisle.role == "branch"]
+    return len(existing) + 1
+
+
+def _branch_conflict(layout: LayoutResult, branch_drivable) -> str | None:
+    for aisle in layout.aisles:
+        if aisle.id == "A-MAIN":
+            continue
+        if area_overlaps(ShapelyPolygon(aisle.polygon), branch_drivable):
+            return aisle.id
+    for stall in layout.stalls:
+        if stall.served_by_aisle_id == "A-MAIN":
+            continue
+        if area_overlaps(ShapelyPolygon(stall.polygon), branch_drivable):
+            return stall.id
+    return None
 
 
 def _heading_deltas(site: SiteSpec) -> tuple[float, ...]:

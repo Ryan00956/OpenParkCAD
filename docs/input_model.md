@@ -946,11 +946,13 @@ constraints full graph circulation      active for generated Phase 2A graph
 constraints maneuvering                 documented, future
 optimization heading_deltas_degrees     active for main aisle heading trials
 optimization entrance_offsets           active for entrance-width offset trials
-optimization branch_start_positions     active for one perpendicular branch trial
+optimization branch_start_positions     active for perpendicular branch trials
 optimization branch_start_step          active for branch start auto-sampling
+optimization max_branches               active for limited multi-branch search
 optimization weights                    active for Phase 1 scoring
 optimization score breakdown            active in JSON report
 report aisles / stalls traceability      active in JSON report
+report selected_branches                active in JSON report
 report traffic_graph validation          active in JSON report
 report attempt graph rejection           active in JSON report
 diagnostics                             active as reporting structure
