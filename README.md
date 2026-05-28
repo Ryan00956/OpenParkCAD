@@ -55,7 +55,9 @@ When same-side branches are selected, the solver may add a connector aisle
 between adjacent branch ends. This can form a simple U-shaped loop when the
 extra aisle reduces the dead-end penalty enough to offset any lost stalls or
 added aisle area. Once a connector is accepted, the endpoint branch turnaround
-pads are removed because those branches are no longer dead ends.
+pads are removed because those branches are no longer dead ends. The connector
+can also serve conservative 90-degree stalls along its sides when there is room
+after leaving a clear throat at both junctions.
 
 Branch start positions are auto-sampled by default. You can also control the
 sampling with:
@@ -65,7 +67,8 @@ sampling with:
   "branch_start_step": 2.5,
   "branch_sides": ["left", "right"],
   "max_branches": 2,
-  "enable_connectors": true
+  "enable_connectors": true,
+  "connector_throat_length": 6.0
 }
 ```
 
@@ -73,7 +76,8 @@ The report includes branch candidate reasons such as
 `branch_too_short_for_turnaround`, `branch_overlaps_existing_layout`, and
 `branch_does_not_improve_score`. Selected branches are listed in
 `selected_branches`; selected connector aisles are listed in
-`selected_connectors`.
+`selected_connectors`, including removed turnaround pads and any stalls added
+along the connector.
 
 Layouts are selected by an explainable score, not only by stall count:
 
@@ -104,8 +108,8 @@ Phase 2B uses that graph validation as a hard candidate filter before scoring.
 Invalid candidates are skipped, and attempt diagnostics include `graph_valid`
 and `graph_errors`.
 
-This is still conservative. It does not yet build loops, intersections, narrow
-aisles, or swept-path turning checks.
+This is still conservative. It does not yet build arbitrary loops,
+intersections, narrow aisles, or swept-path turning checks.
 
 ## Input Format
 
@@ -165,9 +169,9 @@ All dimensions are interpreted as meters.
 ## Current Limitations
 
 This is still an early algorithmic kernel. It now builds a graph for generated
-aisles and stalls, but it does not yet generate loops, intersections, narrow
-aisles, turning swept paths, fire access validation, slopes, local code
-profiles, accessible stalls, or mixed parking modules.
+aisles and stalls, but it does not yet generate arbitrary road networks,
+intersections, narrow aisles, turning swept paths, fire access validation,
+slopes, local code profiles, accessible stalls, or mixed parking modules.
 
 ## Design Notes
 

@@ -44,6 +44,15 @@ class Phase1Candidate:
     branch_candidates: list[dict[str, object]]
 
 
+@dataclass(frozen=True)
+class ConnectorGeometry:
+    polygon: object
+    u_min: float
+    u_max: float
+    center_v: float
+    side: str
+
+
 def iter_phase1_candidates(
     site: SiteSpec,
     finalize_layout: FinalizeLayout,
@@ -445,15 +454,16 @@ def _connector_layout(
     connector_id = f"A-CONNECTOR-{len(base.selected_connectors) + 1:03d}"
     branch_a_id = str(branch_a["id"])
     branch_b_id = str(branch_b["id"])
-    connector = _connector_polygon(site, entrance, heading_degrees, branch_a, branch_b)
+    connector_geometry = _connector_geometry(site, entrance, heading_degrees, branch_a, branch_b)
     diagnostic: dict[str, object] = {
         "connector_id": connector_id,
         "connects": [branch_a_id, branch_b_id],
         "reason": "connector_evaluated",
     }
-    if connector is None:
+    if connector_geometry is None:
         diagnostic["reason"] = "connector_geometry_not_possible"
         return None, diagnostic
+    connector = connector_geometry.polygon
     if not available.covers(connector):
         diagnostic["reason"] = "connector_geometry_outside_usable_area"
         return None, diagnostic
@@ -472,6 +482,21 @@ def _connector_layout(
     kept_aisles = [
         aisle for aisle in base.aisles if aisle.id not in removed_turnarounds
     ]
+    occupied = unary_union(
+        [ShapelyPolygon(aisle.polygon) for aisle in kept_aisles]
+        + [connector_drivable]
+        + [ShapelyPolygon(stall.polygon) for stall in kept_stalls]
+    )
+    connector_stalls = _stalls_along_connector(
+        site,
+        available,
+        entrance,
+        heading_degrees,
+        connector_geometry,
+        connector_id,
+        occupied,
+        start_index=len(kept_stalls) + 1,
+    )
     connector_aisle = ParkingAisle(
         id=connector_id,
         polygon=polygon_points(connector_drivable),
@@ -486,13 +511,14 @@ def _connector_layout(
             "id": connector_id,
             "connects": [branch_a_id, branch_b_id],
             "removed_stalls": removed_stalls,
+            "added_stalls": len(connector_stalls),
             "removed_turnarounds": sorted(removed_turnarounds),
         },
     ]
     result = finalize_layout(
         LayoutResult(
             site=site,
-            stalls=_renumber_stalls(kept_stalls),
+            stalls=_renumber_stalls(kept_stalls + connector_stalls),
             aisles=[*kept_aisles, connector_aisle],
             selected_angle_degrees=base.selected_angle_degrees,
             generation_mode=base.generation_mode,
@@ -510,6 +536,7 @@ def _connector_layout(
     )
     diagnostic["stall_count"] = result.stall_count
     diagnostic["removed_stalls"] = removed_stalls
+    diagnostic["added_stalls"] = len(connector_stalls)
     diagnostic["removed_turnarounds"] = sorted(removed_turnarounds)
     diagnostic["graph_valid"] = graph_valid(result)
     diagnostic["graph_errors"] = list(result.graph_validation.get("errors", []))
@@ -521,6 +548,51 @@ def _connector_layout(
         return result, diagnostic
     diagnostic["reason"] = "connector_improves_score"
     return result, diagnostic
+
+
+def _stalls_along_connector(
+    site: SiteSpec,
+    available,
+    entrance: EntranceSpec,
+    heading_degrees: float,
+    connector: ConnectorGeometry,
+    connector_id: str,
+    occupied,
+    start_index: int,
+) -> list[ParkingStall]:
+    stalls: list[ParkingStall] = []
+    if not module_angle_allowed(90.0, site.stall.allowed_angles):
+        return stalls
+
+    throat = _connector_throat_length(site)
+    u = connector.u_min + throat
+    end_u = connector.u_max - throat
+    if end_u - u < site.stall.width:
+        return stalls
+
+    direction = 1 if connector.side == "left" else -1
+    half_width = site.aisle_width / 2
+    while u + site.stall.width <= end_u + 1e-9:
+        for stall_side in ("outer", "inner"):
+            if stall_side == "outer":
+                v1 = connector.center_v + direction * half_width
+                v2 = connector.center_v + direction * (half_width + site.stall.length)
+            else:
+                v1 = connector.center_v - direction * half_width
+                v2 = connector.center_v - direction * (half_width + site.stall.length)
+            stall = normalized_local_box_to_world((u, v1, u + site.stall.width, v2), entrance, heading_degrees)
+            if available.covers(stall) and not area_overlaps(occupied, stall):
+                stalls.append(
+                    ParkingStall(
+                        id=f"P-{start_index + len(stalls):03d}",
+                        polygon=polygon_points(stall),
+                        angle_degrees=heading_degrees,
+                        served_by_aisle_id=connector_id,
+                        aisle_side=stall_side,
+                    )
+                )
+        u += site.stall.width
+    return stalls
 
 
 def _connector_pairs(layout: LayoutResult) -> list[tuple[dict[str, object], dict[str, object]]]:
@@ -535,7 +607,7 @@ def _connector_pairs(layout: LayoutResult) -> list[tuple[dict[str, object], dict
     return pairs
 
 
-def _connector_polygon(site: SiteSpec, entrance: EntranceSpec, heading_degrees: float, branch_a: dict[str, object], branch_b: dict[str, object]):
+def _connector_geometry(site: SiteSpec, entrance: EntranceSpec, heading_degrees: float, branch_a: dict[str, object], branch_b: dict[str, object]) -> ConnectorGeometry | None:
     u1 = float(branch_a["start_u"])
     u2 = float(branch_b["start_u"])
     if abs(u2 - u1) <= site.aisle_width:
@@ -552,7 +624,13 @@ def _connector_polygon(site: SiteSpec, entrance: EntranceSpec, heading_degrees: 
         max(u1, u2),
         center_v + site.aisle_width / 2,
     )
-    return normalized_local_box_to_world(local, entrance, heading_degrees)
+    return ConnectorGeometry(
+        polygon=normalized_local_box_to_world(local, entrance, heading_degrees),
+        u_min=min(u1, u2),
+        u_max=max(u1, u2),
+        center_v=center_v,
+        side=side,
+    )
 
 
 def _connector_conflict(layout: LayoutResult, connector, endpoint_branch_ids: set[str]) -> str | None:
@@ -568,6 +646,15 @@ def _connector_conflict(layout: LayoutResult, connector, endpoint_branch_ids: se
 
 def _connected_turnaround_ids(branch_ids: set[str]) -> set[str]:
     return {f"{branch_id}-TURNAROUND" for branch_id in branch_ids}
+
+
+def _connector_throat_length(site: SiteSpec) -> float:
+    raw = site.optimization.get("connector_throat_length", site.aisle_width)
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        value = site.aisle_width
+    return max(value, 0.0)
 
 
 def _max_clear_aisle_length(site: SiteSpec, available, entrance: EntranceSpec, heading_degrees: float, start: float) -> float:

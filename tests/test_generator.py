@@ -353,6 +353,7 @@ def test_phase2d_layout_can_connect_same_side_branches():
             "branch_start_positions": [18, 32, 46],
             "branch_sides": ["left"],
             "max_branches": 2,
+            "connector_throat_length": 3.0,
             "weights": {
                 "stall_count": 100,
                 "aisle_area": 0,
@@ -364,13 +365,15 @@ def test_phase2d_layout_can_connect_same_side_branches():
 
     layout = generate_layout(site)
 
-    assert layout.selected_connectors == [
-        {
-            "id": "A-CONNECTOR-001",
-            "connects": ["A-BRANCH-001", "A-BRANCH-002"],
-            "removed_stalls": 0,
-            "removed_turnarounds": ["A-BRANCH-001-TURNAROUND", "A-BRANCH-002-TURNAROUND"],
-        }
+    assert len(layout.selected_connectors) == 1
+    selected_connector = layout.selected_connectors[0]
+    assert selected_connector["id"] == "A-CONNECTOR-001"
+    assert selected_connector["connects"] == ["A-BRANCH-001", "A-BRANCH-002"]
+    assert selected_connector["removed_stalls"] == 0
+    assert selected_connector["added_stalls"] > 0
+    assert selected_connector["removed_turnarounds"] == [
+        "A-BRANCH-001-TURNAROUND",
+        "A-BRANCH-002-TURNAROUND",
     ]
     assert "A-BRANCH-001-TURNAROUND" not in {aisle.id for aisle in layout.aisles}
     assert "A-BRANCH-002-TURNAROUND" not in {aisle.id for aisle in layout.aisles}
@@ -380,6 +383,7 @@ def test_phase2d_layout_can_connect_same_side_branches():
     assert connector.connected_aisle_ids == ("A-BRANCH-002",)
     assert layout.graph_validation["valid"] is True
     assert "A-CONNECTOR-001" in layout.graph_validation["reachable_aisles"]
+    assert any(stall.served_by_aisle_id == "A-CONNECTOR-001" for stall in layout.stalls)
     assert {item["aisle_id"] for item in layout.graph_validation["dead_ends"]} == {"A-TURNAROUND"}
     assert any(item["reason"] == "connector_improves_score" for item in layout.attempts[0].branch_candidates)
 

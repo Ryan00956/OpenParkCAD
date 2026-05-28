@@ -324,6 +324,30 @@ include:
 - `connector_does_not_improve_score`,
 - `connector_improves_score`.
 
+### Phase 2E: Connector-Side Stall Generation
+
+Accepted connector aisles can now serve their own conservative 90-degree stall
+candidates. This is still not a full module optimizer, but it prevents a
+U-shaped connector from becoming pure circulation space when its sides can
+safely hold parking.
+
+Current rules:
+
+- Connector-side stalls are generated only after the connector aisle itself is
+  accepted as a geometric candidate.
+- `optimization.connector_throat_length` controls the clear space kept near
+  each connector-to-branch junction. It defaults to one aisle width.
+- The generator tries both connector sides, marked as `outer` and `inner`.
+- A connector-side stall must fit inside the usable site.
+- A connector-side stall must avoid existing aisles, existing stalls, and the
+  connector aisle itself.
+- A connector-side stall is counted only if it is served by the connector aisle.
+- The final candidate must still pass traffic graph validation.
+- The final candidate must improve the score before it is kept.
+
+The report keeps connector details in `selected_connectors` and now includes
+`added_stalls` alongside `removed_stalls` and `removed_turnarounds`.
+
 ## Phase 3: Maneuver Validity
 
 ### Goal
