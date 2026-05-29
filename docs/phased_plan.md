@@ -492,6 +492,26 @@ Current rules:
 This does not yet support angled stalls on branches, connector aisles, mixed
 angled/perpendicular layouts, or parallel/T-end generation.
 
+### Phase 3D-2: Branch Angled Stall Generation
+
+Angled stall generation now extends from the main aisle to perpendicular branch
+aisles.
+
+Current rules:
+
+- Branch aisle geometry is still the same conservative wide two-way branch.
+- Angled branch stalls use the same selected angled module as main-aisle angled
+  stalls.
+- Angled branch stalls are generated on both sides of the branch aisle where
+  they fit.
+- Angled branch stalls are checked by the active `angled_proxy` maneuver rule.
+- Same-side connector aisles remain disabled for angled active stall families.
+- The report records `connectors_not_supported_for_stall_family` when connector
+  trials are skipped for angled stalls.
+
+This still does not support angled connector-side stalls, mixed
+angled/perpendicular layouts, or parallel/T-end generation.
+
 ## Phase 4: Candidate Generation and Optimization
 
 ### Goal

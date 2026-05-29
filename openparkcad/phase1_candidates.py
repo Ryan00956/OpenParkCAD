@@ -257,13 +257,6 @@ def _with_best_branch(
 ) -> tuple[LayoutResult, list[dict[str, object]]]:
     if not site.optimization.get("enable_branches", True):
         return base, []
-    if site.stall.family != "perpendicular":
-        return base, [
-            {
-                "reason": "branches_not_supported_for_stall_family",
-                "stall_family": site.stall.family,
-            }
-        ]
 
     best = base
     branch_candidates: list[dict[str, object]] = []
@@ -429,6 +422,21 @@ def _stalls_along_branch(
     occupied,
     start_index: int,
 ) -> list[ParkingStall]:
+    if site.stall.family == "angled":
+        return _angled_stalls_along_branch(
+            site,
+            available,
+            entrance,
+            heading_degrees,
+            branch_u,
+            side,
+            branch_id,
+            start_t,
+            end_t,
+            occupied,
+            start_index,
+        )
+
     stalls: list[ParkingStall] = []
     t = start_t
     direction = 1 if side == "left" else -1
@@ -466,6 +474,57 @@ def _stalls_along_branch(
     return stalls
 
 
+def _angled_stalls_along_branch(
+    site: SiteSpec,
+    available,
+    entrance: EntranceSpec,
+    heading_degrees: float,
+    branch_u: float,
+    side: str,
+    branch_id: str,
+    start_t: float,
+    end_t: float,
+    occupied,
+    start_index: int,
+) -> list[ParkingStall]:
+    angle = angled_module_angle(site.stall.allowed_angles)
+    if angle is None:
+        return []
+
+    stalls: list[ParkingStall] = []
+    theta = math.radians(angle)
+    front_pitch = site.stall.width / math.sin(theta)
+    forward_shift = site.stall.length * math.cos(theta)
+    lateral_depth = site.stall.length * math.sin(theta)
+    direction = 1 if side == "left" else -1
+    branch_heading = heading_degrees + (90 if side == "left" else -90)
+    t = start_t
+    while t + front_pitch + forward_shift <= end_t + 1e-9:
+        for stall_side in ("left", "right"):
+            cross = 1 if stall_side == "left" else -1
+            front_u = branch_u + cross * site.aisle_width / 2
+            local_points = [
+                (front_u, direction * t),
+                (front_u, direction * (t + front_pitch)),
+                (front_u + cross * lateral_depth, direction * (t + front_pitch + forward_shift)),
+                (front_u + cross * lateral_depth, direction * (t + forward_shift)),
+            ]
+            stall = _local_polygon_to_world(local_points, entrance, heading_degrees)
+            if available.covers(stall) and not area_overlaps(occupied, stall):
+                stall_id = f"P-{start_index + len(stalls):03d}"
+                stalls.append(
+                    ParkingStall(
+                        id=stall_id,
+                        polygon=polygon_points(stall),
+                        angle_degrees=branch_heading + cross * angle,
+                        served_by_aisle_id=branch_id,
+                        aisle_side=stall_side,
+                    )
+                )
+        t += front_pitch
+    return stalls
+
+
 def _with_best_connectors(
     site: SiteSpec,
     available,
@@ -478,6 +537,14 @@ def _with_best_connectors(
     diagnostics: list[dict[str, object]],
 ) -> LayoutResult:
     if not site.optimization.get("enable_connectors", True):
+        return base
+    if site.stall.family != "perpendicular":
+        diagnostics.append(
+            {
+                "reason": "connectors_not_supported_for_stall_family",
+                "stall_family": site.stall.family,
+            }
+        )
         return base
     best = base
     for branch_a, branch_b in _connector_pairs(best):

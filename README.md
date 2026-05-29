@@ -122,9 +122,10 @@ clips can invalidate a stall even when the immediate front rectangle is clear.
 Phase 3C-1 routes stalls through explicit maneuver rules. The active rule is
 currently `perpendicular_90_proxy`. Phase 3C-2 also adds an active
 `angled_proxy` validator rule for angled stall geometry. Phase 3D-1 can
-generate angled stalls along the main aisle only; branches, connectors, mixed
-modules, parallel stalls, T-end stalls, and non-90 perpendicular stalls remain
-future work and are reported with explicit reasons if encountered.
+generate angled stalls along the main aisle, and Phase 3D-2 extends angled
+generation to branch aisles. Connector-side angled stalls, mixed modules,
+parallel stalls, T-end stalls, and non-90 perpendicular stalls remain future
+work and are reported with explicit reasons if encountered.
 
 You can tune these maneuver checks with:
 

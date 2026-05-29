@@ -117,7 +117,7 @@ def test_phase2b_rejects_candidates_without_exit_path():
             )
         ],
         fixed_aisle_class="wide-two-way-no-cross",
-        optimization={"heading_deltas_degrees": [0], "entrance_offsets": [0]},
+        optimization={"heading_deltas_degrees": [0], "entrance_offsets": [0], "enable_branches": False},
     )
 
     layout = generate_layout(site)
@@ -203,11 +203,61 @@ def test_phase3d_generates_angled_stalls_on_main_aisle():
     assert layout.graph_validation["valid"] is True
     assert layout.maneuver_validation["valid"] is True
     assert layout.maneuver_validation["rule_counts"] == {"angled_proxy": layout.stall_count}
-    assert any(item["reason"] == "branches_not_supported_for_stall_family" for item in layout.attempts[0].branch_candidates)
     assert all(
         abs(abs(stall.angle_degrees - layout.selected_heading_degrees) - 60.0) <= 1e-6
         for stall in layout.stalls
     )
+
+
+def test_phase3d_can_add_angled_branch_stalls():
+    site = SiteSpec(
+        name="angled-branch",
+        boundary=[(0, 0), (80, 0), (80, 64), (0, 64)],
+        stall=StallSpec(width=2.5, length=5.0, family="angled", allowed_angles=(60.0,)),
+        aisle_width=6.0,
+        margin=0.0,
+        entrances=[
+            EntranceSpec(
+                id="main",
+                mode="shared",
+                center=(40, 0),
+                width=8.0,
+                heading_degrees=90.0,
+            )
+        ],
+        aisle_classes=[
+            AisleClassSpec(
+                id="wide-two-way-no-cross",
+                width=6.0,
+                capacity="two_vehicle",
+                directionality="two_way",
+            )
+        ],
+        fixed_aisle_class="wide-two-way-no-cross",
+        optimization={
+            "heading_deltas_degrees": [0],
+            "entrance_offsets": [0],
+            "branch_start_positions": [24],
+            "branch_sides": ["left"],
+            "max_branches": 1,
+            "weights": {
+                "stall_count": 100,
+                "aisle_area": 0,
+                "dead_end_length": 0,
+                "branch_count": 0,
+            },
+        },
+    )
+
+    layout = generate_layout(site)
+
+    assert [branch["id"] for branch in layout.selected_branches] == ["A-BRANCH-001"]
+    assert "A-BRANCH-001" in {stall.served_by_aisle_id for stall in layout.stalls}
+    assert layout.selected_connectors == []
+    assert layout.graph_validation["valid"] is True
+    assert layout.maneuver_validation["valid"] is True
+    assert layout.maneuver_validation["rule_counts"] == {"angled_proxy": layout.stall_count}
+    assert any(item["reason"] == "connectors_not_supported_for_stall_family" for item in layout.attempts[0].branch_candidates)
 
 
 def test_phase1_layout_evaluates_heading_candidates():
