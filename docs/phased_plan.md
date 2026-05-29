@@ -424,6 +424,28 @@ The report includes `turn_buffer_length`,
 Phase 3B is still a proxy. Full steering arcs, swept paths, and exact minimum
 turning radius checks remain future work.
 
+### Phase 3C-1: Maneuver Rule Dispatch
+
+The maneuver validator now routes each stall through an explicit maneuver rule
+instead of assuming every future stall type will reuse the same geometry.
+
+Current rules:
+
+- `perpendicular_90_proxy` is the only active rule.
+- The active rule uses the Phase 3A access envelope and Phase 3B turning-sweep
+  proxy.
+- `angled`, `parallel`, `t_end`, and non-90 perpendicular rules are recognized
+  as future maneuver rules.
+- Unsupported future rules return explicit invalid reasons such as
+  `angled_maneuver_rule_not_implemented`,
+  `parallel_maneuver_rule_not_implemented`, and
+  `t_end_maneuver_rule_not_implemented`.
+- The report includes `rule_counts`, `rule_support`, and per-stall `rule_id`
+  / `rule_status` in `maneuver_validation`.
+
+This keeps current 90-degree behavior stable while preparing the validator for
+angled, parallel, and T-end parking modules.
+
 ## Phase 4: Candidate Generation and Optimization
 
 ### Goal

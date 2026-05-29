@@ -932,6 +932,7 @@ pedestrian routes                       reserved no-parking later
 fire lanes                              reserved no-parking later
 parking.stall_types standard-90         active
 parking angled / parallel / t_end       documented, future
+parking maneuver rule dispatch          active for active/future rule reporting
 stall drive_over                        documented, future maneuver rule
 stall access_sides / blocked_sides      documented, future maneuver rule
 vehicles design_vehicle                 parsed first, used later
@@ -945,6 +946,7 @@ constraints phase1 aisle connectivity   active as simple parent links
 constraints full graph circulation      active for generated Phase 2A graph
 constraints maneuvering access envelope active as Phase 3A proxy
 constraints turning sweep proxy         active as Phase 3B proxy
+constraints maneuver rule support       active for Phase 3C-1 dispatch
 constraints exact turning radius        documented, future
 optimization heading_deltas_degrees     active for main aisle heading trials
 optimization entrance_offsets           active for entrance-width offset trials
@@ -965,6 +967,7 @@ report selected_branches                active in JSON report
 report selected_connectors              active, includes removed and added stalls
 report traffic_graph validation          active in JSON report
 report maneuver_validation              active in JSON report
+report maneuver_validation rule_counts  active in JSON report
 report attempt graph rejection           active in JSON report
 diagnostics                             active as reporting structure
 ```

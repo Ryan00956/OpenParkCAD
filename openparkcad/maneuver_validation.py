@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 from shapely.geometry import LineString, Polygon as ShapelyPolygon
@@ -8,6 +10,22 @@ from shapely.ops import unary_union
 
 from openparkcad.layout_geometry import area_overlaps, available_area, polygon_points
 from openparkcad.models import LayoutResult, ParkingStall, SiteSpec
+
+
+@dataclass(frozen=True)
+class ManeuverContext:
+    site: SiteSpec
+    aisle_by_id: dict[str, ShapelyPolygon]
+    drivable: Any
+    usable: Any
+
+
+@dataclass(frozen=True)
+class ManeuverRule:
+    id: str
+    family: str
+    status: str
+    evaluate: Callable[[ManeuverContext, ParkingStall], dict[str, Any]]
 
 
 def apply_maneuver_filter(layout: LayoutResult) -> LayoutResult:
@@ -31,16 +49,27 @@ def validate_maneuvers(layout: LayoutResult) -> dict[str, Any]:
     aisle_by_id = {aisle.id: ShapelyPolygon(aisle.polygon) for aisle in layout.aisles}
     drivable = unary_union(list(aisle_by_id.values())) if aisle_by_id else ShapelyPolygon()
     usable = available_area(layout.site)
+    context = ManeuverContext(
+        site=layout.site,
+        aisle_by_id=aisle_by_id,
+        drivable=drivable,
+        usable=usable,
+    )
     invalid: list[dict[str, Any]] = []
     envelopes: list[dict[str, Any]] = []
+    rule_counts: dict[str, int] = {}
 
     for stall in layout.stalls:
-        envelope_result = _access_envelope(layout.site, stall, aisle_by_id)
+        rule = _rule_for_stall(layout.site, stall)
+        rule_counts[rule.id] = rule_counts.get(rule.id, 0) + 1
+        envelope_result = rule.evaluate(context, stall)
         if envelope_result["envelope"] is None:
             invalid.append(
                 {
                     "stall_id": stall.id,
                     "served_by_aisle_id": stall.served_by_aisle_id,
+                    "rule_id": rule.id,
+                    "rule_status": rule.status,
                     "reason": envelope_result["reason"],
                 }
             )
@@ -57,6 +86,8 @@ def validate_maneuvers(layout: LayoutResult) -> dict[str, Any]:
         record = {
             "stall_id": stall.id,
             "served_by_aisle_id": stall.served_by_aisle_id,
+            "rule_id": rule.id,
+            "rule_status": rule.status,
             "drivable_coverage_ratio": drivable_ratio,
             "usable_coverage_ratio": usable_ratio,
             "turn_drivable_coverage_ratio": turn_drivable_ratio,
@@ -82,14 +113,17 @@ def validate_maneuvers(layout: LayoutResult) -> dict[str, Any]:
         "minimum_coverage_ratio": _minimum_coverage_ratio(layout.site),
         "turn_buffer_length": _turn_buffer_length(layout.site),
         "minimum_turn_coverage_ratio": _minimum_turn_coverage_ratio(layout.site),
+        "rule_counts": rule_counts,
+        "rule_support": _rule_support_report(layout.site),
         "envelopes": envelopes,
     }
 
 
-def _access_envelope(site: SiteSpec, stall: ParkingStall, aisle_by_id: dict[str, ShapelyPolygon]) -> dict[str, Any]:
+def _perpendicular_access_envelope(context: ManeuverContext, stall: ParkingStall) -> dict[str, Any]:
+    site = context.site
     if not stall.served_by_aisle_id:
         return {"envelope": None, "reason": "stall_has_no_serving_aisle"}
-    aisle = aisle_by_id.get(stall.served_by_aisle_id)
+    aisle = context.aisle_by_id.get(stall.served_by_aisle_id)
     if aisle is None:
         return {"envelope": None, "reason": "serving_aisle_missing"}
 
@@ -111,6 +145,80 @@ def _access_envelope(site: SiteSpec, stall: ParkingStall, aisle_by_id: dict[str,
     if turn_proxy is None or turn_proxy.area <= 1e-9:
         return {"envelope": None, "reason": "turning_sweep_not_possible"}
     return {"envelope": envelope, "turn_proxy": turn_proxy, "reason": "ok"}
+
+
+def _unsupported_maneuver_rule(reason: str) -> Callable[[ManeuverContext, ParkingStall], dict[str, Any]]:
+    def evaluate(_context: ManeuverContext, _stall: ParkingStall) -> dict[str, Any]:
+        return {"envelope": None, "reason": reason}
+
+    return evaluate
+
+
+def _rule_for_stall(site: SiteSpec, stall: ParkingStall) -> ManeuverRule:
+    family = site.stall.family
+    if family == "perpendicular" and _angle_supported_for_perpendicular(site, stall):
+        return ManeuverRule(
+            id="perpendicular_90_proxy",
+            family=family,
+            status="active",
+            evaluate=_perpendicular_access_envelope,
+        )
+    if family == "perpendicular":
+        return ManeuverRule(
+            id="perpendicular_non_90_future",
+            family=family,
+            status="future",
+            evaluate=_unsupported_maneuver_rule("perpendicular_non_90_maneuver_rule_not_implemented"),
+        )
+    if family == "angled":
+        return ManeuverRule(
+            id="angled_future",
+            family=family,
+            status="future",
+            evaluate=_unsupported_maneuver_rule("angled_maneuver_rule_not_implemented"),
+        )
+    if family == "parallel":
+        return ManeuverRule(
+            id="parallel_future",
+            family=family,
+            status="future",
+            evaluate=_unsupported_maneuver_rule("parallel_maneuver_rule_not_implemented"),
+        )
+    if family == "t_end":
+        return ManeuverRule(
+            id="t_end_future",
+            family=family,
+            status="future",
+            evaluate=_unsupported_maneuver_rule("t_end_maneuver_rule_not_implemented"),
+        )
+    return ManeuverRule(
+        id="unknown_family_future",
+        family=family,
+        status="future",
+        evaluate=_unsupported_maneuver_rule("stall_family_maneuver_rule_not_implemented"),
+    )
+
+
+def _rule_support_report(site: SiteSpec) -> dict[str, str]:
+    return {
+        "perpendicular_90_proxy": "active" if site.stall.family == "perpendicular" else "available",
+        "perpendicular_non_90": "future",
+        "angled": "future",
+        "parallel": "future",
+        "t_end": "future",
+    }
+
+
+def _angle_supported_for_perpendicular(site: SiteSpec, stall: ParkingStall) -> bool:
+    _ = stall
+    if not _angle_allowed(90.0, site.stall.allowed_angles):
+        return False
+    return True
+
+
+def _angle_allowed(angle: float, allowed_angles: tuple[float, ...]) -> bool:
+    normalized = angle % 180
+    return any(abs(normalized - (allowed % 180)) <= 1e-6 for allowed in allowed_angles)
 
 
 def _front_edge(stall: ShapelyPolygon, aisle: ShapelyPolygon, target_width: float) -> LineString | None:

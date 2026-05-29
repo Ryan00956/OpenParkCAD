@@ -183,6 +183,15 @@ def _constraint_status(site: SiteSpec, layout: LayoutResult | None) -> list[dict
             ),
         },
         {
+            "constraint": "maneuver rule dispatch",
+            "status": _maneuver_status(layout),
+            "note": (
+                "Phase 3C-1 dispatches stalls to explicit active or future maneuver rules."
+                if _maneuver_status(layout) == "active"
+                else "Maneuver rule dispatch is only available after layout generation."
+            ),
+        },
+        {
             "constraint": "vehicle turning radius",
             "status": "future",
             "note": "Vehicle data is parsed but swept path and turning-radius checks are not implemented yet.",
@@ -217,6 +226,7 @@ def _field_support(site: SiteSpec, layout: LayoutResult | None) -> dict[str, str
         "vehicles.design_vehicle": "parsed_not_enforced" if site.vehicle else "future",
         "parking.standard_perpendicular": "active",
         "parking.angled_parallel_t_end": "future",
+        "parking.maneuver_rule_dispatch": _maneuver_status(layout),
         "parking.drive_over": "parsed_not_enforced",
         "parking.access_sides": "parsed_not_enforced",
         "parking.blocked_sides": "parsed_not_enforced",
@@ -235,6 +245,7 @@ def _field_support(site: SiteSpec, layout: LayoutResult | None) -> dict[str, str
         "constraints.full_aisle_graph_reachability": _traffic_graph_status(layout),
         "constraints.maneuver_access_envelope": _maneuver_status(layout),
         "constraints.turning_sweep_proxy": _maneuver_status(layout),
+        "constraints.maneuver_rule_dispatch": _maneuver_status(layout),
         "constraints.turning_radius": "future",
         "constraints.swept_path": "future",
         "optimization.weights": "parsed_not_enforced" if site.optimization else "future",

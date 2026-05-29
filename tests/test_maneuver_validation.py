@@ -115,6 +115,8 @@ def test_phase3a_filter_keeps_valid_access_envelopes():
 
     assert filtered.stall_count == 1
     assert filtered.maneuver_validation["valid"] is True
+    assert filtered.maneuver_validation["rule_counts"] == {"perpendicular_90_proxy": 1}
+    assert filtered.maneuver_validation["envelopes"][0]["rule_id"] == "perpendicular_90_proxy"
 
 
 def test_phase3b_turning_proxy_rejects_blocked_side_sweep():
@@ -199,3 +201,78 @@ def test_phase3b_turning_proxy_can_filter_generated_stalls_near_aisle_ends():
         item["reason"] == "turning_sweep_not_in_drivable_aisle"
         for item in layout.maneuver_validation["pre_filter_invalid_stalls"]
     )
+
+
+def test_phase3c_reports_future_parallel_maneuver_rule():
+    site = SiteSpec(
+        name="future-parallel-rule",
+        boundary=[(0, 0), (20, 0), (20, 20), (0, 20)],
+        stall=StallSpec(width=2.5, length=5.0, family="parallel", allowed_angles=(0.0,)),
+        aisle_width=6.0,
+        margin=0.0,
+    )
+    layout = LayoutResult(
+        site=site,
+        stalls=[
+            ParkingStall(
+                id="P-001",
+                polygon=[(4, 6), (9, 6), (9, 8.5), (4, 8.5)],
+                angle_degrees=0.0,
+                served_by_aisle_id="A-MAIN",
+                aisle_side="right",
+            )
+        ],
+        aisles=[
+            ParkingAisle(
+                id="A-MAIN",
+                polygon=[(0, 0), (10, 0), (10, 6), (0, 6)],
+                angle_degrees=90.0,
+                role="main",
+            )
+        ],
+    )
+
+    validation = validate_maneuvers(layout)
+
+    assert validation["valid"] is False
+    assert validation["rule_counts"] == {"parallel_future": 1}
+    assert validation["rule_support"]["parallel"] == "future"
+    assert validation["invalid_stalls"][0]["rule_id"] == "parallel_future"
+    assert validation["invalid_stalls"][0]["reason"] == "parallel_maneuver_rule_not_implemented"
+
+
+def test_phase3c_filters_future_maneuver_rule_stalls():
+    site = SiteSpec(
+        name="filter-future-rule",
+        boundary=[(0, 0), (20, 0), (20, 20), (0, 20)],
+        stall=StallSpec(width=2.5, length=5.0, family="angled", allowed_angles=(60.0,)),
+        aisle_width=6.0,
+        margin=0.0,
+    )
+    layout = LayoutResult(
+        site=site,
+        stalls=[
+            ParkingStall(
+                id="P-001",
+                polygon=[(4, 6), (6.5, 6), (6.5, 11), (4, 11)],
+                angle_degrees=60.0,
+                served_by_aisle_id="A-MAIN",
+                aisle_side="left",
+            )
+        ],
+        aisles=[
+            ParkingAisle(
+                id="A-MAIN",
+                polygon=[(0, 0), (10, 0), (10, 6), (0, 6)],
+                angle_degrees=90.0,
+                role="main",
+            )
+        ],
+    )
+
+    filtered = apply_maneuver_filter(layout)
+
+    assert filtered.stall_count == 0
+    assert filtered.maneuver_validation["valid"] is True
+    assert filtered.maneuver_validation["filtered_stall_count"] == 1
+    assert filtered.maneuver_validation["pre_filter_invalid_stalls"][0]["reason"] == "angled_maneuver_rule_not_implemented"

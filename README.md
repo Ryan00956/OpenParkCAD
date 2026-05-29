@@ -118,6 +118,12 @@ filtered before graph validation and scoring.
 Phase 3B adds a conservative turning-sweep proxy. It expands that stall-front
 envelope along the aisle direction on both sides, so side obstacles or aisle-end
 clips can invalidate a stall even when the immediate front rectangle is clear.
+
+Phase 3C-1 routes stalls through explicit maneuver rules. The active rule is
+currently `perpendicular_90_proxy`; angled, parallel, T-end, and non-90
+perpendicular stalls are recognized as future rules and reported with explicit
+reasons if encountered.
+
 You can tune these maneuver checks with:
 
 ```json
