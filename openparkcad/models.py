@@ -56,6 +56,7 @@ class SiteSpec:
     boundary: Polygon
     obstacles: list[Polygon] = field(default_factory=list)
     stall: StallSpec = field(default_factory=StallSpec)
+    stall_candidates: tuple[StallSpec, ...] = field(default_factory=tuple)
     aisle_width: float = 6.0
     angle_degrees: float = 0.0
     candidate_angles: tuple[float, ...] = (0.0,)
@@ -129,6 +130,8 @@ class LayoutResult:
     selected_branch_length: float | None = None
     selected_branches: list[dict[str, Any]] = field(default_factory=list)
     selected_connectors: list[dict[str, Any]] = field(default_factory=list)
+    selected_stall_type_id: str | None = None
+    stall_type_attempts: list[dict[str, Any]] = field(default_factory=list)
     score: dict[str, float] = field(default_factory=dict)
     graph_validation: dict[str, Any] = field(default_factory=dict)
     maneuver_validation: dict[str, Any] = field(default_factory=dict)
@@ -169,7 +172,8 @@ def _phase0_site_from_dict(data: dict[str, Any]) -> SiteSpec:
         for index, item in enumerate(site_data.get("obstacles", []), start=1)
     ]
 
-    stall = _active_stall_spec(parking_data)
+    stall_candidates = _enabled_stall_specs(parking_data)
+    stall = stall_candidates[0]
     aisle_classes = [_aisle_class(item) for item in aisles_data.get("classes", [])]
     fixed_aisle_class = aisles_data.get("fixed_class")
     aisle_width = _selected_aisle_width(aisle_classes, fixed_aisle_class, default=6.0)
@@ -187,6 +191,7 @@ def _phase0_site_from_dict(data: dict[str, Any]) -> SiteSpec:
         boundary=boundary,
         obstacles=obstacles,
         stall=stall,
+        stall_candidates=stall_candidates,
         aisle_width=aisle_width,
         angle_degrees=stall.allowed_angles[0],
         candidate_angles=_stall_candidate_angles(parking_data),
@@ -231,13 +236,14 @@ def _obstacle_polygon(raw: Any, index: int) -> Polygon:
     return _geometry_polygon(item["geometry"], f"site.obstacles[{index}].geometry")
 
 
-def _active_stall_spec(parking_data: dict[str, Any]) -> StallSpec:
+def _enabled_stall_specs(parking_data: dict[str, Any]) -> tuple[StallSpec, ...]:
     stall_types = parking_data.get("stall_types", [])
     enabled = [item for item in stall_types if item.get("enabled", True)]
-    if enabled:
-        data = enabled[0]
-    else:
-        data = stall_types[0] if stall_types else {}
+    raw_candidates = enabled or (stall_types[:1] if stall_types else [{}])
+    return tuple(_stall_spec(data) for data in raw_candidates)
+
+
+def _stall_spec(data: dict[str, Any]) -> StallSpec:
     return StallSpec(
         id=str(data.get("id", "standard")),
         family=str(data.get("family", "perpendicular")),

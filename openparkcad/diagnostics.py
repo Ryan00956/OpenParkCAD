@@ -95,6 +95,12 @@ def build_input_diagnostics(site: SiteSpec, layout: LayoutResult | None = None) 
             "max_branches": site.optimization.get("max_branches", 2),
             "enable_connectors": site.optimization.get("enable_connectors", True),
         },
+        "stall_type_selection": {
+            "selected_stall_type_id": layout.selected_stall_type_id if layout else site.stall.id,
+            "active_stall_type_id": site.stall.id,
+            "candidate_stall_type_ids": [stall.id for stall in _stall_candidates(site)],
+            "attempts": layout.stall_type_attempts if layout else [],
+        },
         "score": layout.score if layout else {},
         "maneuver_validation": layout.maneuver_validation if layout else None,
         "active_stall_type": asdict(site.stall),
@@ -234,6 +240,7 @@ def _field_support(site: SiteSpec, layout: LayoutResult | None) -> dict[str, str
         "pedestrian_and_emergency.fire_lanes": _pedestrian_status(site, "fire_lanes"),
         "vehicles.design_vehicle": "parsed_not_enforced" if site.vehicle else "future",
         "parking.standard_perpendicular": "active",
+        "parking.stall_type_candidate_selection": "active" if len(_stall_candidates(site)) > 1 else "available",
         "parking.angled_maneuver_proxy": _angled_maneuver_status(site, layout),
         "parking.angled_main_aisle_generation": _angled_generation_status(site, layout),
         "parking.angled_branch_generation": _angled_branch_generation_status(site, layout),
@@ -273,6 +280,10 @@ def _pedestrian_status(site: SiteSpec, key: str) -> str:
     if site.pedestrian_and_emergency.get(key):
         return "drawn_not_enforced"
     return "future"
+
+
+def _stall_candidates(site: SiteSpec):
+    return site.stall_candidates or (site.stall,)
 
 
 def _phase1_main_aisle_active(layout: LayoutResult | None) -> bool:

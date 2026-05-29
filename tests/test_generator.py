@@ -260,6 +260,62 @@ def test_phase3d_can_add_angled_branch_stalls():
     assert any(item["reason"] == "connectors_not_supported_for_stall_family" for item in layout.attempts[0].branch_candidates)
 
 
+def test_phase3e_compares_enabled_stall_type_candidates():
+    perpendicular = StallSpec(id="standard-90", width=2.5, length=5.0, family="perpendicular", allowed_angles=(90.0,))
+    angled = StallSpec(id="angled-60", width=2.5, length=5.0, family="angled", allowed_angles=(60.0,))
+    site = SiteSpec(
+        name="stall-type-compare",
+        boundary=[(0, 0), (86, 0), (86, 66), (0, 66)],
+        stall=perpendicular,
+        stall_candidates=(perpendicular, angled),
+        aisle_width=6.0,
+        margin=0.0,
+        entrances=[
+            EntranceSpec(
+                id="main",
+                mode="shared",
+                center=(43, 0),
+                width=8.0,
+                heading_degrees=90.0,
+            )
+        ],
+        aisle_classes=[
+            AisleClassSpec(
+                id="wide-two-way-no-cross",
+                width=6.0,
+                capacity="two_vehicle",
+                directionality="two_way",
+            )
+        ],
+        fixed_aisle_class="wide-two-way-no-cross",
+        optimization={
+            "heading_deltas_degrees": [0],
+            "entrance_offsets": [0],
+            "branch_start_positions": [24, 42, 60],
+            "branch_sides": ["left"],
+            "max_branches": 1,
+            "weights": {
+                "stall_count": 100,
+                "aisle_area": 0,
+                "dead_end_length": 0,
+                "branch_count": 0,
+            },
+        },
+    )
+
+    layout = generate_layout(site)
+
+    assert {item["id"] for item in layout.stall_type_attempts} == {"standard-90", "angled-60"}
+    assert layout.selected_stall_type_id in {"standard-90", "angled-60"}
+    assert layout.site.stall.id == layout.selected_stall_type_id
+    assert sum(1 for item in layout.stall_type_attempts if item["selected"]) == 1
+    selected_attempt = next(item for item in layout.stall_type_attempts if item["selected"])
+    assert selected_attempt["score_total"] == max(item["score_total"] for item in layout.stall_type_attempts)
+    diagnostics = build_input_diagnostics(layout.site, layout)
+    assert diagnostics["stall_type_selection"]["selected_stall_type_id"] == layout.selected_stall_type_id
+    assert diagnostics["field_support"]["parking.stall_type_candidate_selection"] == "active"
+
+
 def test_phase1_layout_evaluates_heading_candidates():
     site = SiteSpec(
         name="skewed",

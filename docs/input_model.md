@@ -937,6 +937,7 @@ parking angled branch generation        active
 parking angled connector generation     documented, future
 parking parallel / t_end                documented, future
 parking maneuver rule dispatch          active for active/future rule reporting
+parking enabled stall type candidates   active for enumerative comparison
 stall drive_over                        documented, future maneuver rule
 stall access_sides / blocked_sides      documented, future maneuver rule
 vehicles design_vehicle                 parsed first, used later
@@ -976,6 +977,8 @@ report selected_connectors              active, includes removed and added stall
 report traffic_graph validation          active in JSON report
 report maneuver_validation              active in JSON report
 report maneuver_validation rule_counts  active in JSON report
+report selected_stall_type_id           active in JSON report
+report stall_type_attempts              active in JSON report
 report attempt graph rejection           active in JSON report
 diagnostics                             active as reporting structure
 ```

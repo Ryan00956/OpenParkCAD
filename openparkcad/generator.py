@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 from openparkcad.maneuver_validation import apply_maneuver_filter
-from openparkcad.models import AngleAttempt, LayoutResult, SiteSpec
+from openparkcad.models import AngleAttempt, LayoutResult, SiteSpec, StallSpec
 from openparkcad.phase1_candidates import iter_phase1_candidates
 from openparkcad.phase1_support import phase1_unsupported_inputs
 from openparkcad.scoring import score_layout, score_total
@@ -9,6 +11,31 @@ from openparkcad.traffic_graph import build_traffic_graph, validate_traffic_grap
 
 
 def generate_layout(site: SiteSpec) -> LayoutResult:
+    candidates = _candidate_stalls(site)
+    if len(candidates) <= 1:
+        selected_site = _site_with_stall(site, candidates[0])
+        layout = _generate_layout_for_site(selected_site)
+        object.__setattr__(layout, "site", replace(selected_site, stall_candidates=candidates))
+        object.__setattr__(layout, "selected_stall_type_id", candidates[0].id)
+        object.__setattr__(layout, "stall_type_attempts", [_stall_type_attempt(layout, selected=True)])
+        return layout
+
+    layouts = [_generate_layout_for_site(_site_with_stall(site, stall)) for stall in candidates]
+    valid_layouts = [layout for layout in layouts if _graph_valid(layout)]
+    best = max(valid_layouts or layouts, key=score_total)
+    selected_site = replace(site, stall=best.site.stall, angle_degrees=best.site.stall.allowed_angles[0], stall_candidates=candidates)
+    object.__setattr__(best, "site", selected_site)
+    object.__setattr__(best, "selected_stall_type_id", best.site.stall.id)
+    object.__setattr__(
+        best,
+        "stall_type_attempts",
+        [_stall_type_attempt(layout, selected=layout.site.stall.id == best.site.stall.id) for layout in layouts],
+    )
+    object.__setattr__(best, "unsupported_phase1_inputs", phase1_unsupported_inputs(selected_site))
+    return best
+
+
+def _generate_layout_for_site(site: SiteSpec) -> LayoutResult:
     """Generate the current Phase 1 layout.
 
     Phase 1 deliberately supports one conservative pattern:
@@ -70,11 +97,41 @@ def generate_layout(site: SiteSpec) -> LayoutResult:
         selected_branch_length=best.selected_branch_length,
         selected_branches=list(best.selected_branches),
         selected_connectors=list(best.selected_connectors),
+        selected_stall_type_id=best.site.stall.id,
         graph_validation=best.graph_validation,
         maneuver_validation=best.maneuver_validation,
         unsupported_phase1_inputs=unsupported,
     )
     return _with_score(result)
+
+
+def _candidate_stalls(site: SiteSpec) -> tuple[StallSpec, ...]:
+    return site.stall_candidates or (site.stall,)
+
+
+def _site_with_stall(site: SiteSpec, stall: StallSpec) -> SiteSpec:
+    return replace(
+        site,
+        stall=stall,
+        angle_degrees=stall.allowed_angles[0],
+        stall_candidates=(),
+    )
+
+
+def _stall_type_attempt(layout: LayoutResult, selected: bool) -> dict[str, object]:
+    return {
+        "id": layout.site.stall.id,
+        "family": layout.site.stall.family,
+        "allowed_angles": list(layout.site.stall.allowed_angles),
+        "stall_count": layout.stall_count,
+        "score_total": score_total(layout),
+        "graph_valid": _graph_valid(layout),
+        "graph_errors": list(layout.graph_validation.get("errors", [])),
+        "maneuver_valid": bool(layout.maneuver_validation.get("valid", False)),
+        "maneuver_invalid_count": len(layout.maneuver_validation.get("invalid_stalls", [])),
+        "unsupported_phase1_inputs": list(layout.unsupported_phase1_inputs),
+        "selected": selected,
+    }
 
 
 def _with_score(layout: LayoutResult) -> LayoutResult:

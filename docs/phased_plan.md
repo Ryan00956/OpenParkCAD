@@ -512,6 +512,30 @@ Current rules:
 This still does not support angled connector-side stalls, mixed
 angled/perpendicular layouts, or parallel/T-end generation.
 
+### Phase 3E: Stall Type Candidate Comparison
+
+The solver can now compare multiple enabled stall types from the input JSON
+instead of requiring the user to pick exactly one active type up front.
+
+Current rules:
+
+- The parser preserves every enabled item in `parking.stall_types`.
+- The first enabled stall type remains the default active stall for backward
+  compatibility.
+- `generate_layout(site)` tries each enabled stall type by cloning the site with
+  that stall as the active type.
+- Each stall-type candidate runs through the existing geometry generator,
+  maneuver validation, traffic graph validation, and scoring pipeline.
+- The selected layout is the graph-valid candidate with the highest score. If
+  no graph-valid candidate exists, the highest-scoring candidate is still
+  returned with its validation errors.
+- The report includes `selected_stall_type_id` and `stall_type_attempts`.
+- `stall_type_attempts` records each candidate's family, allowed angles, stall
+  count, score, graph validity, maneuver validity, and unsupported inputs.
+
+This is still a small enumerative comparison, not a mixed-module optimizer. It
+does not yet combine perpendicular and angled stalls in the same layout.
+
 ## Phase 4: Candidate Generation and Optimization
 
 ### Goal

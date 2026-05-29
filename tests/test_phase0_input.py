@@ -22,6 +22,61 @@ def test_phase0_example_parses_core_fields():
     assert len(site.site_features) == 2
 
 
+def test_phase0_parser_preserves_enabled_stall_type_candidates():
+    data = {
+        "version": "0.1",
+        "name": "candidate stalls",
+        "site": {
+            "boundary": {
+                "type": "polygon",
+                "points": [[0, 0], [30, 0], [30, 30], [0, 30]],
+            }
+        },
+        "entrances": [
+            {
+                "id": "main",
+                "mode": "shared",
+                "center": [15, 0],
+                "width": 8.0,
+                "heading_degrees": 90,
+            }
+        ],
+        "parking": {
+            "stall_types": [
+                {
+                    "id": "standard-90",
+                    "family": "perpendicular",
+                    "width": 2.5,
+                    "length": 5.0,
+                    "allowed_angles": [90],
+                    "enabled": True,
+                },
+                {
+                    "id": "angled-60",
+                    "family": "angled",
+                    "width": 2.5,
+                    "length": 5.0,
+                    "allowed_angles": [60],
+                    "enabled": True,
+                },
+                {
+                    "id": "disabled-parallel",
+                    "family": "parallel",
+                    "width": 2.5,
+                    "length": 6.0,
+                    "allowed_angles": [0],
+                    "enabled": False,
+                },
+            ]
+        },
+    }
+
+    site = site_from_dict(data)
+
+    assert site.stall.id == "standard-90"
+    assert [stall.id for stall in site.stall_candidates] == ["standard-90", "angled-60"]
+
+
 def test_phase0_diagnostics_are_honest_about_future_fields():
     data = json.loads(Path("examples/phase0_site.json").read_text(encoding="utf-8"))
     site = site_from_dict(data)

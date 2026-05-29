@@ -66,6 +66,8 @@ def _write_report(layout, path: str) -> None:
         },
         "selected_branches": layout.selected_branches,
         "selected_connectors": layout.selected_connectors,
+        "selected_stall_type_id": layout.selected_stall_type_id,
+        "stall_type_attempts": layout.stall_type_attempts,
         "score": layout.score,
         "maneuver_validation": layout.maneuver_validation,
         "unsupported_phase1_inputs": layout.unsupported_phase1_inputs,
@@ -104,8 +106,11 @@ def _write_report(layout, path: str) -> None:
             for attempt in layout.attempts
         ],
         "stall": {
+            "id": layout.site.stall.id,
+            "family": layout.site.stall.family,
             "width": layout.site.stall.width,
             "length": layout.site.stall.length,
+            "allowed_angles": list(layout.site.stall.allowed_angles),
         },
         "aisle_width": layout.site.aisle_width,
         "traffic_graph": traffic_graph_report(layout),

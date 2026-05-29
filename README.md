@@ -127,6 +127,12 @@ generation to branch aisles. Connector-side angled stalls, mixed modules,
 parallel stalls, T-end stalls, and non-90 perpendicular stalls remain future
 work and are reported with explicit reasons if encountered.
 
+Phase 3E compares enabled stall type candidates. If the input JSON enables more
+than one stall type, the solver tries each candidate independently, runs the
+same geometry, maneuver, graph, and scoring pipeline, then selects the
+highest-scoring graph-valid layout. The report includes
+`selected_stall_type_id` and `stall_type_attempts` so the choice is visible.
+
 You can tune these maneuver checks with:
 
 ```json
