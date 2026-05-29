@@ -120,9 +120,11 @@ envelope along the aisle direction on both sides, so side obstacles or aisle-end
 clips can invalidate a stall even when the immediate front rectangle is clear.
 
 Phase 3C-1 routes stalls through explicit maneuver rules. The active rule is
-currently `perpendicular_90_proxy`; angled, parallel, T-end, and non-90
-perpendicular stalls are recognized as future rules and reported with explicit
-reasons if encountered.
+currently `perpendicular_90_proxy`. Phase 3C-2 also adds an active
+`angled_proxy` validator rule for angled stall geometry, while angled stall
+generation is still future work. Parallel, T-end, and non-90 perpendicular
+stalls are recognized as future rules and reported with explicit reasons if
+encountered.
 
 You can tune these maneuver checks with:
 
@@ -131,7 +133,9 @@ You can tune these maneuver checks with:
   "maneuver_access_depth": 6.0,
   "maneuver_access_coverage_ratio": 0.95,
   "maneuver_turn_buffer_length": 2.5,
-  "maneuver_turn_coverage_ratio": 0.95
+  "maneuver_turn_coverage_ratio": 0.95,
+  "maneuver_angled_access_depth": 5.2,
+  "maneuver_angled_turn_buffer_length": 1.25
 }
 ```
 

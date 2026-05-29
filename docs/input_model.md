@@ -931,7 +931,9 @@ entrances center / width / heading      active for straight main aisle
 pedestrian routes                       reserved no-parking later
 fire lanes                              reserved no-parking later
 parking.stall_types standard-90         active
-parking angled / parallel / t_end       documented, future
+parking angled maneuver rule            active as validator-only proxy
+parking angled generation               documented, future
+parking parallel / t_end                documented, future
 parking maneuver rule dispatch          active for active/future rule reporting
 stall drive_over                        documented, future maneuver rule
 stall access_sides / blocked_sides      documented, future maneuver rule
@@ -960,6 +962,10 @@ optimization maneuver_access_depth      active for Phase 3A access envelope
 optimization maneuver_access_coverage_ratio active for Phase 3A access envelope
 optimization maneuver_turn_buffer_length active for Phase 3B turn proxy
 optimization maneuver_turn_coverage_ratio active for Phase 3B turn proxy
+optimization maneuver_angled_access_depth active for angled validator proxy
+optimization maneuver_angled_turn_buffer_length active for angled validator proxy
+optimization maneuver_angled_access_coverage_ratio active for angled validator proxy
+optimization maneuver_angled_turn_coverage_ratio active for angled validator proxy
 optimization weights                    active for Phase 1 scoring
 optimization score breakdown            active in JSON report
 report aisles / stalls traceability      active in JSON report

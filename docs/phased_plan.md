@@ -446,6 +446,29 @@ Current rules:
 This keeps current 90-degree behavior stable while preparing the validator for
 angled, parallel, and T-end parking modules.
 
+### Phase 3C-2: Angled Stall Maneuver Proxy
+
+The maneuver validator now has an active angled-stall rule. This does not mean
+the generator can place angled stalls yet; it means a layout containing angled
+stall geometry can be checked by the maneuver layer.
+
+Current rules:
+
+- `angled_proxy` is active for `parking.active_stall.family = "angled"`.
+- The rule finds the angled stall edge facing its serving aisle.
+- It projects a conservative access envelope from that edge into the aisle.
+- It also applies the Phase 3B turning-sweep proxy with angled-specific
+  defaults.
+- `optimization.maneuver_angled_access_depth` can override angled access depth.
+- `optimization.maneuver_angled_turn_buffer_length` can override angled turning
+  buffer length.
+- `optimization.maneuver_angled_access_coverage_ratio` and
+  `optimization.maneuver_angled_turn_coverage_ratio` can override the coverage
+  thresholds.
+- The report identifies angled checks with `rule_id = angled_proxy`.
+
+Parallel and T-end maneuver rules remain future work.
+
 ## Phase 4: Candidate Generation and Optimization
 
 ### Goal

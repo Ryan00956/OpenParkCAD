@@ -192,6 +192,15 @@ def _constraint_status(site: SiteSpec, layout: LayoutResult | None) -> list[dict
             ),
         },
         {
+            "constraint": "angled stall maneuver proxy",
+            "status": _angled_maneuver_status(site, layout),
+            "note": (
+                "Phase 3C-2 can validate angled stall access envelopes, but angled stall generation is still future work."
+                if _angled_maneuver_status(site, layout) == "active"
+                else "Angled stall maneuver validation is available only when the active stall family is angled."
+            ),
+        },
+        {
             "constraint": "vehicle turning radius",
             "status": "future",
             "note": "Vehicle data is parsed but swept path and turning-radius checks are not implemented yet.",
@@ -225,7 +234,9 @@ def _field_support(site: SiteSpec, layout: LayoutResult | None) -> dict[str, str
         "pedestrian_and_emergency.fire_lanes": _pedestrian_status(site, "fire_lanes"),
         "vehicles.design_vehicle": "parsed_not_enforced" if site.vehicle else "future",
         "parking.standard_perpendicular": "active",
-        "parking.angled_parallel_t_end": "future",
+        "parking.angled_maneuver_proxy": _angled_maneuver_status(site, layout),
+        "parking.angled_generation": "future",
+        "parking.parallel_t_end": "future",
         "parking.maneuver_rule_dispatch": _maneuver_status(layout),
         "parking.drive_over": "parsed_not_enforced",
         "parking.access_sides": "parsed_not_enforced",
@@ -311,3 +322,9 @@ def _maneuver_status(layout: LayoutResult | None) -> str:
     if not validation:
         return "future"
     return "active" if validation.get("valid") else "active_failed"
+
+
+def _angled_maneuver_status(site: SiteSpec, layout: LayoutResult | None) -> str:
+    if site.stall.family != "angled":
+        return "available"
+    return _maneuver_status(layout)

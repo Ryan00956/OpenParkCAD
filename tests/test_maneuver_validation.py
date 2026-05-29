@@ -241,11 +241,49 @@ def test_phase3c_reports_future_parallel_maneuver_rule():
     assert validation["invalid_stalls"][0]["reason"] == "parallel_maneuver_rule_not_implemented"
 
 
+def test_phase3c_angled_proxy_validates_angled_stall_access():
+    site = SiteSpec(
+        name="angled-rule",
+        boundary=[(0, 0), (20, 0), (20, 20), (0, 20)],
+        stall=StallSpec(width=2.5, length=5.0, family="angled", allowed_angles=(60.0,)),
+        aisle_width=6.0,
+        margin=0.0,
+    )
+    layout = LayoutResult(
+        site=site,
+        stalls=[
+            ParkingStall(
+                id="P-001",
+                polygon=[(4, 6), (6.5, 6), (9, 11), (6.5, 11)],
+                angle_degrees=60.0,
+                served_by_aisle_id="A-MAIN",
+                aisle_side="left",
+            )
+        ],
+        aisles=[
+            ParkingAisle(
+                id="A-MAIN",
+                polygon=[(0, 0), (10, 0), (10, 6), (0, 6)],
+                angle_degrees=90.0,
+                role="main",
+            )
+        ],
+    )
+
+    validation = validate_maneuvers(layout)
+
+    assert validation["valid"] is True
+    assert validation["rule_counts"] == {"angled_proxy": 1}
+    assert validation["rule_support"]["angled_proxy"] == "active"
+    assert validation["envelopes"][0]["rule_id"] == "angled_proxy"
+    assert validation["envelopes"][0]["depth"] < site.aisle_width
+
+
 def test_phase3c_filters_future_maneuver_rule_stalls():
     site = SiteSpec(
         name="filter-future-rule",
         boundary=[(0, 0), (20, 0), (20, 20), (0, 20)],
-        stall=StallSpec(width=2.5, length=5.0, family="angled", allowed_angles=(60.0,)),
+        stall=StallSpec(width=2.5, length=5.0, family="t_end", allowed_angles=(90.0,)),
         aisle_width=6.0,
         margin=0.0,
     )
@@ -275,4 +313,4 @@ def test_phase3c_filters_future_maneuver_rule_stalls():
     assert filtered.stall_count == 0
     assert filtered.maneuver_validation["valid"] is True
     assert filtered.maneuver_validation["filtered_stall_count"] == 1
-    assert filtered.maneuver_validation["pre_filter_invalid_stalls"][0]["reason"] == "angled_maneuver_rule_not_implemented"
+    assert filtered.maneuver_validation["pre_filter_invalid_stalls"][0]["reason"] == "t_end_maneuver_rule_not_implemented"
