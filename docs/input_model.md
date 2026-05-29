@@ -932,7 +932,8 @@ pedestrian routes                       reserved no-parking later
 fire lanes                              reserved no-parking later
 parking.stall_types standard-90         active
 parking angled maneuver rule            active as validator-only proxy
-parking angled generation               documented, future
+parking angled main-aisle generation    active, main aisle only
+parking angled branch/connector generation documented, future
 parking parallel / t_end                documented, future
 parking maneuver rule dispatch          active for active/future rule reporting
 stall drive_over                        documented, future maneuver rule

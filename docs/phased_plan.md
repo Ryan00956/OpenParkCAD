@@ -448,9 +448,9 @@ angled, parallel, and T-end parking modules.
 
 ### Phase 3C-2: Angled Stall Maneuver Proxy
 
-The maneuver validator now has an active angled-stall rule. This does not mean
-the generator can place angled stalls yet; it means a layout containing angled
-stall geometry can be checked by the maneuver layer.
+The maneuver validator now has an active angled-stall rule. This was added
+before angled generation, so a layout containing angled stall geometry could be
+checked by the maneuver layer even before the generator started placing it.
 
 Current rules:
 
@@ -468,6 +468,29 @@ Current rules:
 - The report identifies angled checks with `rule_id = angled_proxy`.
 
 Parallel and T-end maneuver rules remain future work.
+
+### Phase 3D-1: Main-Aisle Angled Stall Generation
+
+The generator can now place angled stalls along the straight main aisle. This
+is the first generated non-90-degree parking module, but it is intentionally
+limited to keep the road-network logic stable.
+
+Current rules:
+
+- `parking.active_stall.family = "angled"` is supported only on the main aisle.
+- The selected angled module uses the first allowed angle between 0 and 90
+  degrees.
+- Angled stall geometry is generated as a conservative parallelogram module.
+- Angled stalls are served by `A-MAIN` and then checked by the `angled_proxy`
+  maneuver rule.
+- Branches and connector-side stalls remain disabled for non-perpendicular
+  active stall families.
+- The report records a branch candidate diagnostic reason
+  `branches_not_supported_for_stall_family` when branch generation is skipped
+  for angled stalls.
+
+This does not yet support angled stalls on branches, connector aisles, mixed
+angled/perpendicular layouts, or parallel/T-end generation.
 
 ## Phase 4: Candidate Generation and Optimization
 

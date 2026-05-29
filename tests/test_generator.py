@@ -161,10 +161,53 @@ def test_phase1_reports_unsupported_stall_types_clearly():
     assert layout.stall_count == 0
     assert {item["field"] for item in layout.unsupported_phase1_inputs} == {
         "parking.active_stall.family",
-        "parking.active_stall.allowed_angles",
         "parking.active_stall.access_sides",
     }
     assert diagnostics["unsupported_phase1_inputs"] == layout.unsupported_phase1_inputs
+
+
+def test_phase3d_generates_angled_stalls_on_main_aisle():
+    site = SiteSpec(
+        name="angled-main",
+        boundary=[(0, 0), (34, 0), (34, 38), (0, 38)],
+        stall=StallSpec(width=2.5, length=5.0, family="angled", allowed_angles=(60.0,)),
+        aisle_width=6.0,
+        margin=0.0,
+        entrances=[
+            EntranceSpec(
+                id="main",
+                mode="shared",
+                center=(17, 0),
+                width=8.0,
+                heading_degrees=90.0,
+            )
+        ],
+        aisle_classes=[
+            AisleClassSpec(
+                id="wide-two-way-no-cross",
+                width=6.0,
+                capacity="two_vehicle",
+                directionality="two_way",
+            )
+        ],
+        fixed_aisle_class="wide-two-way-no-cross",
+        optimization={"heading_deltas_degrees": [0], "entrance_offsets": [0]},
+    )
+
+    layout = generate_layout(site)
+
+    assert layout.stall_count > 0
+    assert {stall.served_by_aisle_id for stall in layout.stalls} == {"A-MAIN"}
+    assert {stall.aisle_side for stall in layout.stalls} <= {"left", "right"}
+    assert layout.selected_branches == []
+    assert layout.graph_validation["valid"] is True
+    assert layout.maneuver_validation["valid"] is True
+    assert layout.maneuver_validation["rule_counts"] == {"angled_proxy": layout.stall_count}
+    assert any(item["reason"] == "branches_not_supported_for_stall_family" for item in layout.attempts[0].branch_candidates)
+    assert all(
+        abs(abs(stall.angle_degrees - layout.selected_heading_degrees) - 60.0) <= 1e-6
+        for stall in layout.stalls
+    )
 
 
 def test_phase1_layout_evaluates_heading_candidates():

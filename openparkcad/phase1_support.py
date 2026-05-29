@@ -22,13 +22,14 @@ def supports_phase1_aisle(site: SiteSpec) -> bool:
 
 def supports_phase1_stall(site: SiteSpec) -> bool:
     stall = site.stall
-    return (
-        stall.family == "perpendicular"
-        and module_angle_allowed(90.0, stall.allowed_angles)
-        and not stall.drive_over
-        and "front" in stall.access_sides
-        and "front" not in stall.blocked_sides
-    )
+    base_supported = not stall.drive_over and "front" in stall.access_sides and "front" not in stall.blocked_sides
+    if not base_supported:
+        return False
+    if stall.family == "perpendicular":
+        return module_angle_allowed(90.0, stall.allowed_angles)
+    if stall.family == "angled":
+        return angled_module_angle(stall.allowed_angles) is not None
+    return False
 
 
 def phase1_unsupported_inputs(site: SiteSpec) -> list[dict[str, str]]:
@@ -61,20 +62,28 @@ def phase1_unsupported_inputs(site: SiteSpec) -> list[dict[str, str]]:
         )
 
     stall = site.stall
-    if stall.family != "perpendicular":
+    if stall.family not in {"perpendicular", "angled"}:
         issues.append(
             {
                 "field": "parking.active_stall.family",
                 "value": stall.family,
-                "reason": "Phase 1 only generates standard perpendicular stalls.",
+                "reason": "Current generation supports standard perpendicular stalls and main-aisle angled stalls only.",
             }
         )
-    if not module_angle_allowed(90.0, stall.allowed_angles):
+    if stall.family == "perpendicular" and not module_angle_allowed(90.0, stall.allowed_angles):
         issues.append(
             {
                 "field": "parking.active_stall.allowed_angles",
                 "value": ",".join(str(angle) for angle in stall.allowed_angles),
                 "reason": "Phase 1 only places 90-degree stalls.",
+            }
+        )
+    if stall.family == "angled" and angled_module_angle(stall.allowed_angles) is None:
+        issues.append(
+            {
+                "field": "parking.active_stall.allowed_angles",
+                "value": ",".join(str(angle) for angle in stall.allowed_angles),
+                "reason": "Angled stall generation needs an angle between 0 and 90 degrees.",
             }
         )
     if stall.drive_over:
@@ -111,6 +120,14 @@ def is_phase1_aisle_class(aisle_class: AisleClassSpec) -> bool:
 def module_angle_allowed(angle: float, allowed_angles: tuple[float, ...]) -> bool:
     normalized = angle % 180
     return any(abs(normalized - (allowed % 180)) <= 1e-6 for allowed in allowed_angles)
+
+
+def angled_module_angle(allowed_angles: tuple[float, ...]) -> float | None:
+    for angle in allowed_angles:
+        normalized = angle % 180
+        if 1e-6 < normalized < 90.0 - 1e-6:
+            return normalized
+    return None
 
 
 def fixed_aisle_class(site: SiteSpec):

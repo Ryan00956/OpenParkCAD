@@ -235,7 +235,8 @@ def _field_support(site: SiteSpec, layout: LayoutResult | None) -> dict[str, str
         "vehicles.design_vehicle": "parsed_not_enforced" if site.vehicle else "future",
         "parking.standard_perpendicular": "active",
         "parking.angled_maneuver_proxy": _angled_maneuver_status(site, layout),
-        "parking.angled_generation": "future",
+        "parking.angled_main_aisle_generation": _angled_generation_status(site, layout),
+        "parking.angled_branch_connector_generation": "future",
         "parking.parallel_t_end": "future",
         "parking.maneuver_rule_dispatch": _maneuver_status(layout),
         "parking.drive_over": "parsed_not_enforced",
@@ -328,3 +329,11 @@ def _angled_maneuver_status(site: SiteSpec, layout: LayoutResult | None) -> str:
     if site.stall.family != "angled":
         return "available"
     return _maneuver_status(layout)
+
+
+def _angled_generation_status(site: SiteSpec, layout: LayoutResult | None) -> str:
+    if site.stall.family != "angled":
+        return "available"
+    if not layout:
+        return "future"
+    return "active" if layout.stall_count > 0 else "active_failed"

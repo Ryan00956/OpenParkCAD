@@ -137,7 +137,7 @@ def _angled_access_envelope(context: ManeuverContext, stall: ParkingStall) -> di
     return _front_access_envelope(
         context,
         stall,
-        target_edge_width=site.stall.width,
+        target_edge_width=_angled_front_edge_width(site),
         access_depth=_angled_access_depth(site),
         turn_buffer_length=_angled_turn_buffer_length(site),
         minimum_coverage_ratio=_minimum_angled_coverage_ratio(site),
@@ -345,6 +345,11 @@ def _angled_access_depth(site: SiteSpec) -> float:
     except (TypeError, ValueError):
         value = default
     return max(value, 0.0)
+
+
+def _angled_front_edge_width(site: SiteSpec) -> float:
+    angle = _active_angled_angle(site)
+    return site.stall.width / max(math.sin(math.radians(angle)), 1e-6)
 
 
 def _turn_buffer_length(site: SiteSpec) -> float:

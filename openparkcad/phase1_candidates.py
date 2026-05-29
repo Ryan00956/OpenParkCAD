@@ -4,6 +4,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 import math
 
+from shapely import affinity
 from shapely.geometry import Polygon as ShapelyPolygon
 from shapely.ops import unary_union
 
@@ -21,6 +22,7 @@ from openparkcad.layout_geometry import (
 )
 from openparkcad.models import EntranceSpec, LayoutResult, ParkingAisle, ParkingStall, SiteSpec
 from openparkcad.phase1_support import (
+    angled_module_angle,
     entry_capable_entrances,
     module_angle_allowed,
     phase1_unsupported_inputs,
@@ -176,6 +178,9 @@ def _empty_layout(
 
 
 def _stalls_along_main_aisle(site: SiteSpec, available, entrance: EntranceSpec, heading_degrees: float, start_u: float, end_u: float) -> list[ParkingStall]:
+    if site.stall.family == "angled":
+        return _angled_stalls_along_main_aisle(site, available, entrance, heading_degrees, start_u, end_u)
+
     stalls: list[ParkingStall] = []
     u = start_u
     while u + site.stall.width <= end_u:
@@ -202,6 +207,43 @@ def _stalls_along_main_aisle(site: SiteSpec, available, entrance: EntranceSpec, 
     return stalls
 
 
+def _angled_stalls_along_main_aisle(site: SiteSpec, available, entrance: EntranceSpec, heading_degrees: float, start_u: float, end_u: float) -> list[ParkingStall]:
+    angle = angled_module_angle(site.stall.allowed_angles)
+    if angle is None:
+        return []
+
+    stalls: list[ParkingStall] = []
+    theta = math.radians(angle)
+    front_pitch = site.stall.width / math.sin(theta)
+    forward_shift = site.stall.length * math.cos(theta)
+    lateral_depth = site.stall.length * math.sin(theta)
+    u = start_u
+    while u + front_pitch + forward_shift <= end_u + 1e-9:
+        for side in ("left", "right"):
+            direction = 1 if side == "left" else -1
+            front_v = direction * site.aisle_width / 2
+            local_points = [
+                (u, front_v),
+                (u + front_pitch, front_v),
+                (u + front_pitch + forward_shift, front_v + direction * lateral_depth),
+                (u + forward_shift, front_v + direction * lateral_depth),
+            ]
+            stall = _local_polygon_to_world(local_points, entrance, heading_degrees)
+            if available.covers(stall):
+                stall_id = f"P-{len(stalls) + 1:03d}"
+                stalls.append(
+                    ParkingStall(
+                        id=stall_id,
+                        polygon=polygon_points(stall),
+                        angle_degrees=heading_degrees + direction * angle,
+                        served_by_aisle_id="A-MAIN",
+                        aisle_side=side,
+                    )
+                )
+        u += front_pitch
+    return stalls
+
+
 def _with_best_branch(
     site: SiteSpec,
     available,
@@ -215,6 +257,13 @@ def _with_best_branch(
 ) -> tuple[LayoutResult, list[dict[str, object]]]:
     if not site.optimization.get("enable_branches", True):
         return base, []
+    if site.stall.family != "perpendicular":
+        return base, [
+            {
+                "reason": "branches_not_supported_for_stall_family",
+                "stall_family": site.stall.family,
+            }
+        ]
 
     best = base
     branch_candidates: list[dict[str, object]] = []
@@ -792,6 +841,12 @@ def _offset_entrance(entrance: EntranceSpec, offset: float) -> EntranceSpec:
         entrance.center[1] + math.sin(normal) * offset,
     )
     return replace(entrance, center=center)
+
+
+def _local_polygon_to_world(points: list[tuple[float, float]], entrance: EntranceSpec, heading_degrees: float):
+    geometry = ShapelyPolygon(points)
+    rotated = affinity.rotate(geometry, heading_degrees, origin=(0, 0), use_radians=False)
+    return affinity.translate(rotated, xoff=entrance.center[0], yoff=entrance.center[1])
 
 
 def _renumber_stalls(stalls: list[ParkingStall]) -> list[ParkingStall]:
