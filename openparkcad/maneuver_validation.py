@@ -9,7 +9,7 @@ from shapely.geometry import LineString, Polygon as ShapelyPolygon
 from shapely.ops import unary_union
 
 from openparkcad.layout_geometry import area_overlaps, available_area, polygon_points
-from openparkcad.models import LayoutResult, ParkingStall, SiteSpec
+from openparkcad.models import LayoutResult, ParkingStall, SiteSpec, StallSpec
 
 
 @dataclass(frozen=True)
@@ -67,6 +67,7 @@ def validate_maneuvers(layout: LayoutResult) -> dict[str, Any]:
             invalid.append(
                 {
                     "stall_id": stall.id,
+                    "stall_type_id": stall.stall_type_id,
                     "served_by_aisle_id": stall.served_by_aisle_id,
                     "rule_id": rule.id,
                     "rule_status": rule.status,
@@ -85,6 +86,7 @@ def validate_maneuvers(layout: LayoutResult) -> dict[str, Any]:
         min_turn_ratio = float(envelope_result["minimum_turn_coverage_ratio"])
         record = {
             "stall_id": stall.id,
+            "stall_type_id": stall.stall_type_id,
             "served_by_aisle_id": stall.served_by_aisle_id,
             "rule_id": rule.id,
             "rule_status": rule.status,
@@ -121,12 +123,13 @@ def validate_maneuvers(layout: LayoutResult) -> dict[str, Any]:
 
 def _perpendicular_access_envelope(context: ManeuverContext, stall: ParkingStall) -> dict[str, Any]:
     site = context.site
+    stall_spec = _stall_spec_for_stall(site, stall)
     return _front_access_envelope(
         context,
         stall,
-        target_edge_width=site.stall.width,
+        target_edge_width=stall_spec.width,
         access_depth=_access_depth(site),
-        turn_buffer_length=_turn_buffer_length(site),
+        turn_buffer_length=_turn_buffer_length(site, stall_spec),
         minimum_coverage_ratio=_minimum_coverage_ratio(site),
         minimum_turn_coverage_ratio=_minimum_turn_coverage_ratio(site),
     )
@@ -134,12 +137,13 @@ def _perpendicular_access_envelope(context: ManeuverContext, stall: ParkingStall
 
 def _angled_access_envelope(context: ManeuverContext, stall: ParkingStall) -> dict[str, Any]:
     site = context.site
+    stall_spec = _stall_spec_for_stall(site, stall)
     return _front_access_envelope(
         context,
         stall,
-        target_edge_width=_angled_front_edge_width(site),
-        access_depth=_angled_access_depth(site),
-        turn_buffer_length=_angled_turn_buffer_length(site),
+        target_edge_width=_angled_front_edge_width(stall_spec),
+        access_depth=_angled_access_depth(site, stall_spec),
+        turn_buffer_length=_angled_turn_buffer_length(site, stall_spec),
         minimum_coverage_ratio=_minimum_angled_coverage_ratio(site),
         minimum_turn_coverage_ratio=_minimum_angled_turn_coverage_ratio(site),
     )
@@ -197,8 +201,9 @@ def _unsupported_maneuver_rule(reason: str) -> Callable[[ManeuverContext, Parkin
 
 
 def _rule_for_stall(site: SiteSpec, stall: ParkingStall) -> ManeuverRule:
-    family = site.stall.family
-    if family == "perpendicular" and _angle_supported_for_perpendicular(site, stall):
+    stall_spec = _stall_spec_for_stall(site, stall)
+    family = stall_spec.family
+    if family == "perpendicular" and _angle_supported_for_perpendicular(stall_spec, stall):
         return ManeuverRule(
             id="perpendicular_90_proxy",
             family=family,
@@ -242,18 +247,19 @@ def _rule_for_stall(site: SiteSpec, stall: ParkingStall) -> ManeuverRule:
 
 
 def _rule_support_report(site: SiteSpec) -> dict[str, str]:
+    active_families = {stall.family for stall in _active_stall_specs(site)}
     return {
-        "perpendicular_90_proxy": "active" if site.stall.family == "perpendicular" else "available",
+        "perpendicular_90_proxy": "active" if "perpendicular" in active_families else "available",
         "perpendicular_non_90": "future",
-        "angled_proxy": "active" if site.stall.family == "angled" else "available",
+        "angled_proxy": "active" if "angled" in active_families else "available",
         "parallel": "future",
         "t_end": "future",
     }
 
 
-def _angle_supported_for_perpendicular(site: SiteSpec, stall: ParkingStall) -> bool:
+def _angle_supported_for_perpendicular(stall_spec: StallSpec, stall: ParkingStall) -> bool:
     _ = stall
-    if not _angle_allowed(90.0, site.stall.allowed_angles):
+    if not _angle_allowed(90.0, stall_spec.allowed_angles):
         return False
     return True
 
@@ -336,8 +342,8 @@ def _access_depth(site: SiteSpec) -> float:
     return max(value, 0.0)
 
 
-def _angled_access_depth(site: SiteSpec) -> float:
-    angle = _active_angled_angle(site)
+def _angled_access_depth(site: SiteSpec, stall_spec: StallSpec) -> float:
+    angle = _active_angled_angle(stall_spec)
     default = site.aisle_width * max(math.sin(math.radians(angle)), 0.5)
     raw = site.optimization.get("maneuver_angled_access_depth", default)
     try:
@@ -347,15 +353,16 @@ def _angled_access_depth(site: SiteSpec) -> float:
     return max(value, 0.0)
 
 
-def _angled_front_edge_width(site: SiteSpec) -> float:
-    angle = _active_angled_angle(site)
-    return site.stall.width / max(math.sin(math.radians(angle)), 1e-6)
+def _angled_front_edge_width(stall_spec: StallSpec) -> float:
+    angle = _active_angled_angle(stall_spec)
+    return stall_spec.width / max(math.sin(math.radians(angle)), 1e-6)
 
 
-def _turn_buffer_length(site: SiteSpec) -> float:
-    default = min(site.aisle_width / 2, site.stall.width)
+def _turn_buffer_length(site: SiteSpec, stall_spec: StallSpec | None = None) -> float:
+    active_stall = stall_spec or site.stall
+    default = min(site.aisle_width / 2, active_stall.width)
     if site.vehicle:
-        default = min(site.aisle_width / 2, max(site.vehicle.width, site.stall.width) + site.vehicle.swept_path_margin)
+        default = min(site.aisle_width / 2, max(site.vehicle.width, active_stall.width) + site.vehicle.swept_path_margin)
     raw = site.optimization.get("maneuver_turn_buffer_length", default)
     try:
         value = float(raw)
@@ -364,8 +371,8 @@ def _turn_buffer_length(site: SiteSpec) -> float:
     return max(value, 0.0)
 
 
-def _angled_turn_buffer_length(site: SiteSpec) -> float:
-    default = min(_turn_buffer_length(site), site.stall.width / 2)
+def _angled_turn_buffer_length(site: SiteSpec, stall_spec: StallSpec) -> float:
+    default = min(_turn_buffer_length(site, stall_spec), stall_spec.width / 2)
     raw = site.optimization.get("maneuver_angled_turn_buffer_length", default)
     try:
         value = float(raw)
@@ -410,8 +417,8 @@ def _minimum_angled_turn_coverage_ratio(site: SiteSpec) -> float:
     return min(max(value, 0.0), 1.0)
 
 
-def _active_angled_angle(site: SiteSpec) -> float:
-    for angle in site.stall.allowed_angles:
+def _active_angled_angle(stall_spec: StallSpec) -> float:
+    for angle in stall_spec.allowed_angles:
         normalized = angle % 180
         if 1e-6 < normalized < 180 - 1e-6 and abs(normalized - 90.0) > 1e-6:
             return normalized
@@ -426,6 +433,22 @@ def _renumber_stalls(stalls: list[ParkingStall]) -> list[ParkingStall]:
             angle_degrees=stall.angle_degrees,
             served_by_aisle_id=stall.served_by_aisle_id,
             aisle_side=stall.aisle_side,
+            stall_type_id=stall.stall_type_id,
         )
         for index, stall in enumerate(stalls, start=1)
     ]
+
+
+def _stall_spec_for_stall(site: SiteSpec, stall: ParkingStall) -> StallSpec:
+    active = {spec.id: spec for spec in _active_stall_specs(site)}
+    if stall.stall_type_id and stall.stall_type_id in active:
+        return active[stall.stall_type_id]
+    return site.stall
+
+
+def _active_stall_specs(site: SiteSpec) -> tuple[StallSpec, ...]:
+    specs: list[StallSpec] = []
+    for spec in (site.main_stall, site.branch_stall, site.stall, *site.stall_candidates):
+        if spec is not None and spec.id not in {item.id for item in specs}:
+            specs.append(spec)
+    return tuple(specs)

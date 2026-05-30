@@ -123,15 +123,33 @@ Phase 3C-1 routes stalls through explicit maneuver rules. The active rule is
 currently `perpendicular_90_proxy`. Phase 3C-2 also adds an active
 `angled_proxy` validator rule for angled stall geometry. Phase 3D-1 can
 generate angled stalls along the main aisle, and Phase 3D-2 extends angled
-generation to branch aisles. Connector-side angled stalls, mixed modules,
-parallel stalls, T-end stalls, and non-90 perpendicular stalls remain future
-work and are reported with explicit reasons if encountered.
+generation to branch aisles. Connector-side angled stalls, parallel stalls,
+T-end stalls, and non-90 perpendicular stalls remain future work and are
+reported with explicit reasons if encountered.
 
 Phase 3E compares enabled stall type candidates. If the input JSON enables more
 than one stall type, the solver tries each candidate independently, runs the
 same geometry, maneuver, graph, and scoring pipeline, then selects the
 highest-scoring graph-valid layout. The report includes
 `selected_stall_type_id` and `stall_type_attempts` so the choice is visible.
+
+Phase 3F-1 compares stall type assignments by aisle role. With multiple enabled
+stall types, it now enumerates `main_stall_type x branch_stall_type`, tags every
+generated stall with `stall_type_id`, validates each stall with the matching
+maneuver rule, and reports `selected_stall_assignment` plus
+`stall_assignment_attempts`.
+
+Phase 4A-1 adds a candidate-object snapshot layer. The solver now reports
+selected aisle/stall objects plus evaluated main, branch, and connector
+candidates in `candidate_snapshot`. This is the data layer for the later
+conflict matrix and optimizer; it does not yet change the selected layout.
+Phase 4A-2 adds that first conflict matrix: candidate objects with geometry now
+record overlapping object ids in `conflict_ids`, and the report includes
+`candidate_snapshot.conflict_matrix`.
+Phase 4B-1 adds a report-only shadow selector over branch and connector
+candidates. It uses the conflict matrix to choose a compatible candidate set and
+stores the result in `candidate_snapshot.selection`; it does not yet replace the
+current generated layout.
 
 You can tune these maneuver checks with:
 
@@ -210,7 +228,7 @@ This is still an early algorithmic kernel. It now builds a graph for generated
 aisles and stalls, but it does not yet generate arbitrary road networks,
 intersections, narrow aisles, steering swept paths, turning-radius validation,
 fire access validation, slopes, local code profiles, accessible stalls, or
-mixed parking modules.
+per-stall mixed parking module optimization.
 
 ## Design Notes
 

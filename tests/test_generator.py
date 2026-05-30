@@ -1,6 +1,7 @@
 from shapely.geometry import Polygon as ShapelyPolygon
 
 from openparkcad import diagnostics
+from openparkcad.candidate_snapshot import candidate_snapshot_report
 from openparkcad.diagnostics import build_input_diagnostics
 from openparkcad.generator import generate_layout
 from openparkcad.models import AisleClassSpec, EntranceSpec, SiteSpec, StallSpec
@@ -49,6 +50,86 @@ def test_phase1_layout_uses_entrance_connected_main_aisle():
     assert all(stall.angle_degrees == 90.0 for stall in layout.stalls)
     assert {stall.served_by_aisle_id for stall in layout.stalls} == {"A-MAIN"}
     assert {stall.aisle_side for stall in layout.stalls} <= {"left", "right"}
+
+
+def test_phase4a_candidate_snapshot_reports_selected_and_evaluated_objects():
+    layout = generate_layout(_phase1_site())
+
+    assert layout.candidate_objects
+    kinds = {candidate.kind for candidate in layout.candidate_objects}
+    assert {"aisle_skeleton", "aisle", "stall"} <= kinds
+    assert any(candidate.role == "main" and candidate.status == "selected" for candidate in layout.candidate_objects)
+    assert any(candidate.kind == "stall" and candidate.geometry for candidate in layout.candidate_objects)
+
+    report = candidate_snapshot_report(layout)
+    assert report["version"] == "phase4b-1"
+    assert report["object_count"] == len(layout.candidate_objects)
+    assert report["status_counts"]["selected"] > 0
+    assert "conflict_count" in report
+    assert "conflict_matrix" in report
+    assert all(set(item) == {"left_id", "right_id", "type", "overlap_area"} for item in report["conflict_matrix"])
+    assert report["selection"]["version"] == "phase4b-1"
+    assert report["selection"]["status"] == "shadow_only"
+    selected_ids = set(report["selection"]["selected_ids"])
+    for conflict in report["conflict_matrix"]:
+        assert not {conflict["left_id"], conflict["right_id"]} <= selected_ids
+
+    input_diagnostics = build_input_diagnostics(layout.site, layout)
+    assert input_diagnostics["field_support"]["optimization.candidate_objects"] == "active"
+    assert input_diagnostics["field_support"]["optimization.candidate_conflict_matrix"] == "active"
+    assert input_diagnostics["field_support"]["optimization.shadow_candidate_selector"] == "active"
+    assert input_diagnostics["candidate_snapshot"]["version"] == "phase4b-1"
+
+
+def test_phase4b_shadow_selector_can_select_compatible_branch_candidates():
+    site = SiteSpec(
+        name="shadow-selector",
+        boundary=[(0, 0), (86, 0), (86, 66), (0, 66)],
+        stall=StallSpec(id="standard-90", width=2.5, length=5.0, family="perpendicular", allowed_angles=(90.0,)),
+        aisle_width=6.0,
+        margin=0.0,
+        entrances=[
+            EntranceSpec(
+                id="main",
+                mode="shared",
+                center=(43, 0),
+                width=8.0,
+                heading_degrees=90.0,
+            )
+        ],
+        aisle_classes=[
+            AisleClassSpec(
+                id="wide-two-way-no-cross",
+                width=6.0,
+                capacity="two_vehicle",
+                directionality="two_way",
+            )
+        ],
+        fixed_aisle_class="wide-two-way-no-cross",
+        optimization={
+            "heading_deltas_degrees": [0],
+            "entrance_offsets": [0],
+            "branch_start_positions": [24, 42, 60],
+            "branch_sides": ["left"],
+            "max_branches": 1,
+            "weights": {
+                "stall_count": 100,
+                "aisle_area": 0,
+                "dead_end_length": 0,
+                "branch_count": 0,
+            },
+        },
+    )
+
+    layout = generate_layout(site)
+
+    assert layout.candidate_selection["version"] == "phase4b-1"
+    assert layout.candidate_selection["selected_count"] > 0
+    selected_ids = set(layout.candidate_selection["selected_ids"])
+    for candidate in layout.candidate_objects:
+        if candidate.id not in selected_ids:
+            continue
+        assert not selected_ids.intersection(candidate.conflict_ids)
 
 
 def test_phase1_layout_keeps_generated_geometry_inside_usable_area():
@@ -260,7 +341,7 @@ def test_phase3d_can_add_angled_branch_stalls():
     assert any(item["reason"] == "connectors_not_supported_for_stall_family" for item in layout.attempts[0].branch_candidates)
 
 
-def test_phase3e_compares_enabled_stall_type_candidates():
+def test_phase3f_compares_stall_type_assignments_by_aisle_role():
     perpendicular = StallSpec(id="standard-90", width=2.5, length=5.0, family="perpendicular", allowed_angles=(90.0,))
     angled = StallSpec(id="angled-60", width=2.5, length=5.0, family="angled", allowed_angles=(60.0,))
     site = SiteSpec(
@@ -305,15 +386,28 @@ def test_phase3e_compares_enabled_stall_type_candidates():
 
     layout = generate_layout(site)
 
-    assert {item["id"] for item in layout.stall_type_attempts} == {"standard-90", "angled-60"}
-    assert layout.selected_stall_type_id in {"standard-90", "angled-60"}
-    assert layout.site.stall.id == layout.selected_stall_type_id
-    assert sum(1 for item in layout.stall_type_attempts if item["selected"]) == 1
-    selected_attempt = next(item for item in layout.stall_type_attempts if item["selected"])
-    assert selected_attempt["score_total"] == max(item["score_total"] for item in layout.stall_type_attempts)
+    assignments = {
+        (item["main_stall_type_id"], item["branch_stall_type_id"])
+        for item in layout.stall_assignment_attempts
+    }
+    assert assignments == {
+        ("standard-90", "standard-90"),
+        ("standard-90", "angled-60"),
+        ("angled-60", "standard-90"),
+        ("angled-60", "angled-60"),
+    }
+    assert layout.selected_stall_assignment["main"] in {"standard-90", "angled-60"}
+    assert layout.selected_stall_assignment["branch"] in {"standard-90", "angled-60"}
+    assert layout.site.stall.id == layout.selected_stall_assignment["main"]
+    assert (layout.site.branch_stall or layout.site.stall).id == layout.selected_stall_assignment["branch"]
+    assert {stall.stall_type_id for stall in layout.stalls} <= set(layout.selected_stall_assignment.values())
+    assert sum(1 for item in layout.stall_assignment_attempts if item["selected"]) == 1
+    selected_attempt = next(item for item in layout.stall_assignment_attempts if item["selected"])
+    assert selected_attempt["score_total"] == max(item["score_total"] for item in layout.stall_assignment_attempts)
     diagnostics = build_input_diagnostics(layout.site, layout)
-    assert diagnostics["stall_type_selection"]["selected_stall_type_id"] == layout.selected_stall_type_id
+    assert diagnostics["stall_type_selection"]["selected_stall_assignment"] == layout.selected_stall_assignment
     assert diagnostics["field_support"]["parking.stall_type_candidate_selection"] == "active"
+    assert diagnostics["field_support"]["parking.stall_type_segment_assignment"] == "active"
 
 
 def test_phase1_layout_evaluates_heading_candidates():

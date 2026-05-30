@@ -20,7 +20,7 @@ from openparkcad.layout_geometry import (
     polygon_points,
     turnaround_polygon,
 )
-from openparkcad.models import EntranceSpec, LayoutResult, ParkingAisle, ParkingStall, SiteSpec
+from openparkcad.models import EntranceSpec, LayoutResult, ParkingAisle, ParkingStall, SiteSpec, StallSpec
 from openparkcad.phase1_support import (
     angled_module_angle,
     entry_capable_entrances,
@@ -178,19 +178,22 @@ def _empty_layout(
 
 
 def _stalls_along_main_aisle(site: SiteSpec, available, entrance: EntranceSpec, heading_degrees: float, start_u: float, end_u: float) -> list[ParkingStall]:
-    if site.stall.family == "angled":
-        return _angled_stalls_along_main_aisle(site, available, entrance, heading_degrees, start_u, end_u)
+    stall_spec = _main_stall(site)
+    if stall_spec.family == "angled":
+        return _angled_stalls_along_main_aisle(site, stall_spec, available, entrance, heading_degrees, start_u, end_u)
+    if stall_spec.family != "perpendicular":
+        return []
 
     stalls: list[ParkingStall] = []
     u = start_u
-    while u + site.stall.width <= end_u:
-        if not module_angle_allowed(90.0, site.stall.allowed_angles):
+    while u + stall_spec.width <= end_u:
+        if not module_angle_allowed(90.0, stall_spec.allowed_angles):
             break
         for side in ("left", "right"):
             if side == "left":
-                local = (u, site.aisle_width / 2, u + site.stall.width, site.aisle_width / 2 + site.stall.length)
+                local = (u, site.aisle_width / 2, u + stall_spec.width, site.aisle_width / 2 + stall_spec.length)
             else:
-                local = (u, -site.aisle_width / 2 - site.stall.length, u + site.stall.width, -site.aisle_width / 2)
+                local = (u, -site.aisle_width / 2 - stall_spec.length, u + stall_spec.width, -site.aisle_width / 2)
             stall = normalized_local_box_to_world(local, entrance, heading_degrees)
             if available.covers(stall):
                 stall_id = f"P-{len(stalls) + 1:03d}"
@@ -201,22 +204,23 @@ def _stalls_along_main_aisle(site: SiteSpec, available, entrance: EntranceSpec, 
                         angle_degrees=heading_degrees,
                         served_by_aisle_id="A-MAIN",
                         aisle_side=side,
+                        stall_type_id=stall_spec.id,
                     )
                 )
-        u += site.stall.width
+        u += stall_spec.width
     return stalls
 
 
-def _angled_stalls_along_main_aisle(site: SiteSpec, available, entrance: EntranceSpec, heading_degrees: float, start_u: float, end_u: float) -> list[ParkingStall]:
-    angle = angled_module_angle(site.stall.allowed_angles)
+def _angled_stalls_along_main_aisle(site: SiteSpec, stall_spec: StallSpec, available, entrance: EntranceSpec, heading_degrees: float, start_u: float, end_u: float) -> list[ParkingStall]:
+    angle = angled_module_angle(stall_spec.allowed_angles)
     if angle is None:
         return []
 
     stalls: list[ParkingStall] = []
     theta = math.radians(angle)
-    front_pitch = site.stall.width / math.sin(theta)
-    forward_shift = site.stall.length * math.cos(theta)
-    lateral_depth = site.stall.length * math.sin(theta)
+    front_pitch = stall_spec.width / math.sin(theta)
+    forward_shift = stall_spec.length * math.cos(theta)
+    lateral_depth = stall_spec.length * math.sin(theta)
     u = start_u
     while u + front_pitch + forward_shift <= end_u + 1e-9:
         for side in ("left", "right"):
@@ -238,6 +242,7 @@ def _angled_stalls_along_main_aisle(site: SiteSpec, available, entrance: Entranc
                         angle_degrees=heading_degrees + direction * angle,
                         served_by_aisle_id="A-MAIN",
                         aisle_side=side,
+                        stall_type_id=stall_spec.id,
                     )
                 )
         u += front_pitch
@@ -321,6 +326,7 @@ def _branch_layout(
     branch_aisle = branch_aisle_polygon(site, entrance, heading_degrees, branch_u, side, branch_length)
     branch_turnaround = branch_turnaround_polygon(site, entrance, heading_degrees, branch_u, side, branch_length)
     branch_drivable = unary_union([branch_aisle, branch_turnaround])
+    diagnostic["geometry"] = polygon_points(branch_drivable)
     if not available.covers(branch_drivable):
         diagnostic["reason"] = "branch_geometry_outside_usable_area"
         return None, diagnostic
@@ -422,9 +428,11 @@ def _stalls_along_branch(
     occupied,
     start_index: int,
 ) -> list[ParkingStall]:
-    if site.stall.family == "angled":
+    stall_spec = _branch_stall(site)
+    if stall_spec.family == "angled":
         return _angled_stalls_along_branch(
             site,
+            stall_spec,
             available,
             entrance,
             heading_degrees,
@@ -436,27 +444,29 @@ def _stalls_along_branch(
             occupied,
             start_index,
         )
+    if stall_spec.family != "perpendicular":
+        return []
 
     stalls: list[ParkingStall] = []
     t = start_t
     direction = 1 if side == "left" else -1
-    while t + site.stall.width <= end_t:
-        if not module_angle_allowed(90.0, site.stall.allowed_angles):
+    while t + stall_spec.width <= end_t:
+        if not module_angle_allowed(90.0, stall_spec.allowed_angles):
             break
         for stall_side in ("left", "right"):
             if stall_side == "left":
                 local = (
                     branch_u + site.aisle_width / 2,
                     direction * t,
-                    branch_u + site.aisle_width / 2 + site.stall.length,
-                    direction * (t + site.stall.width),
+                    branch_u + site.aisle_width / 2 + stall_spec.length,
+                    direction * (t + stall_spec.width),
                 )
             else:
                 local = (
-                    branch_u - site.aisle_width / 2 - site.stall.length,
+                    branch_u - site.aisle_width / 2 - stall_spec.length,
                     direction * t,
                     branch_u - site.aisle_width / 2,
-                    direction * (t + site.stall.width),
+                    direction * (t + stall_spec.width),
                 )
             stall = normalized_local_box_to_world(local, entrance, heading_degrees)
             if available.covers(stall) and not area_overlaps(occupied, stall):
@@ -468,14 +478,16 @@ def _stalls_along_branch(
                         angle_degrees=heading_degrees + (90 if side == "left" else -90),
                         served_by_aisle_id=branch_id,
                         aisle_side=stall_side,
+                        stall_type_id=stall_spec.id,
                     )
                 )
-        t += site.stall.width
+        t += stall_spec.width
     return stalls
 
 
 def _angled_stalls_along_branch(
     site: SiteSpec,
+    stall_spec: StallSpec,
     available,
     entrance: EntranceSpec,
     heading_degrees: float,
@@ -487,15 +499,15 @@ def _angled_stalls_along_branch(
     occupied,
     start_index: int,
 ) -> list[ParkingStall]:
-    angle = angled_module_angle(site.stall.allowed_angles)
+    angle = angled_module_angle(stall_spec.allowed_angles)
     if angle is None:
         return []
 
     stalls: list[ParkingStall] = []
     theta = math.radians(angle)
-    front_pitch = site.stall.width / math.sin(theta)
-    forward_shift = site.stall.length * math.cos(theta)
-    lateral_depth = site.stall.length * math.sin(theta)
+    front_pitch = stall_spec.width / math.sin(theta)
+    forward_shift = stall_spec.length * math.cos(theta)
+    lateral_depth = stall_spec.length * math.sin(theta)
     direction = 1 if side == "left" else -1
     branch_heading = heading_degrees + (90 if side == "left" else -90)
     t = start_t
@@ -519,6 +531,7 @@ def _angled_stalls_along_branch(
                         angle_degrees=branch_heading + cross * angle,
                         served_by_aisle_id=branch_id,
                         aisle_side=stall_side,
+                        stall_type_id=stall_spec.id,
                     )
                 )
         t += front_pitch
@@ -538,11 +551,13 @@ def _with_best_connectors(
 ) -> LayoutResult:
     if not site.optimization.get("enable_connectors", True):
         return base
-    if site.stall.family != "perpendicular":
+    stall_spec = _connector_stall(site)
+    if stall_spec.family != "perpendicular":
         diagnostics.append(
             {
                 "reason": "connectors_not_supported_for_stall_family",
-                "stall_family": site.stall.family,
+                "stall_family": stall_spec.family,
+                "stall_type_id": stall_spec.id,
             }
         )
         return base
@@ -580,6 +595,7 @@ def _connector_layout(
         diagnostic["reason"] = "connector_geometry_not_possible"
         return None, diagnostic
     connector = connector_geometry.polygon
+    diagnostic["geometry"] = polygon_points(connector)
     if not available.covers(connector):
         diagnostic["reason"] = "connector_geometry_outside_usable_area"
         return None, diagnostic
@@ -677,26 +693,27 @@ def _stalls_along_connector(
     start_index: int,
 ) -> list[ParkingStall]:
     stalls: list[ParkingStall] = []
-    if not module_angle_allowed(90.0, site.stall.allowed_angles):
+    stall_spec = _connector_stall(site)
+    if not module_angle_allowed(90.0, stall_spec.allowed_angles):
         return stalls
 
     throat = _connector_throat_length(site)
     u = connector.u_min + throat
     end_u = connector.u_max - throat
-    if end_u - u < site.stall.width:
+    if end_u - u < stall_spec.width:
         return stalls
 
     direction = 1 if connector.side == "left" else -1
     half_width = site.aisle_width / 2
-    while u + site.stall.width <= end_u + 1e-9:
+    while u + stall_spec.width <= end_u + 1e-9:
         for stall_side in ("outer", "inner"):
             if stall_side == "outer":
                 v1 = connector.center_v + direction * half_width
-                v2 = connector.center_v + direction * (half_width + site.stall.length)
+                v2 = connector.center_v + direction * (half_width + stall_spec.length)
             else:
                 v1 = connector.center_v - direction * half_width
-                v2 = connector.center_v - direction * (half_width + site.stall.length)
-            stall = normalized_local_box_to_world((u, v1, u + site.stall.width, v2), entrance, heading_degrees)
+                v2 = connector.center_v - direction * (half_width + stall_spec.length)
+            stall = normalized_local_box_to_world((u, v1, u + stall_spec.width, v2), entrance, heading_degrees)
             if available.covers(stall) and not area_overlaps(occupied, stall):
                 stalls.append(
                     ParkingStall(
@@ -705,9 +722,10 @@ def _stalls_along_connector(
                         angle_degrees=heading_degrees,
                         served_by_aisle_id=connector_id,
                         aisle_side=stall_side,
+                        stall_type_id=stall_spec.id,
                     )
                 )
-        u += site.stall.width
+        u += stall_spec.width
     return stalls
 
 
@@ -776,7 +794,7 @@ def _connector_throat_length(site: SiteSpec) -> float:
 def _max_clear_aisle_length(site: SiteSpec, available, entrance: EntranceSpec, heading_degrees: float, start: float) -> float:
     min_x, min_y, max_x, max_y = ShapelyPolygon(site.boundary).bounds
     diagonal = math.hypot(max_x - min_x, max_y - min_y)
-    step = max(site.stall.width, 0.5)
+    step = max(_module_step_width(site), 0.5)
     best = start
     length = start + site.aisle_width * 2
 
@@ -802,7 +820,7 @@ def _max_clear_aisle_length(site: SiteSpec, available, entrance: EntranceSpec, h
 def _max_clear_branch_length(site: SiteSpec, available, entrance: EntranceSpec, heading_degrees: float, branch_u: float, side: str) -> float:
     min_x, min_y, max_x, max_y = ShapelyPolygon(site.boundary).bounds
     diagonal = math.hypot(max_x - min_x, max_y - min_y)
-    step = max(site.stall.width, 0.5)
+    step = max(_module_step_width(site), 0.5)
     best = 0.0
     length = site.aisle_width * 2
 
@@ -833,8 +851,9 @@ def _branch_start_positions(site: SiteSpec, main_aisle_length: float) -> tuple[f
         return ()
     if isinstance(raw, list):
         return tuple(sorted({float(item) for item in raw if min_u <= float(item) <= max_u}))
-    step = float(site.optimization.get("branch_start_step", site.stall.width * 2))
-    step = max(step, site.stall.width)
+    module_width = _module_step_width(site)
+    step = float(site.optimization.get("branch_start_step", module_width * 2))
+    step = max(step, module_width)
     positions: list[float] = []
     u = min_u
     while u <= max_u + 1e-9:
@@ -924,6 +943,23 @@ def _renumber_stalls(stalls: list[ParkingStall]) -> list[ParkingStall]:
             angle_degrees=stall.angle_degrees,
             served_by_aisle_id=stall.served_by_aisle_id,
             aisle_side=stall.aisle_side,
+            stall_type_id=stall.stall_type_id,
         )
         for index, stall in enumerate(stalls, start=1)
     ]
+
+
+def _main_stall(site: SiteSpec) -> StallSpec:
+    return site.main_stall or site.stall
+
+
+def _branch_stall(site: SiteSpec) -> StallSpec:
+    return site.branch_stall or site.main_stall or site.stall
+
+
+def _connector_stall(site: SiteSpec) -> StallSpec:
+    return _branch_stall(site)
+
+
+def _module_step_width(site: SiteSpec) -> float:
+    return min(_main_stall(site).width, _branch_stall(site).width)

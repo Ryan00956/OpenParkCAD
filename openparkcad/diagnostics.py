@@ -97,11 +97,21 @@ def build_input_diagnostics(site: SiteSpec, layout: LayoutResult | None = None) 
         },
         "stall_type_selection": {
             "selected_stall_type_id": layout.selected_stall_type_id if layout else site.stall.id,
+            "selected_stall_assignment": layout.selected_stall_assignment if layout else {},
             "active_stall_type_id": site.stall.id,
             "candidate_stall_type_ids": [stall.id for stall in _stall_candidates(site)],
             "attempts": layout.stall_type_attempts if layout else [],
+            "assignment_attempts": layout.stall_assignment_attempts if layout else [],
         },
         "score": layout.score if layout else {},
+        "candidate_snapshot": {
+            "version": "phase4b-1",
+            "object_count": len(layout.candidate_objects) if layout else 0,
+            "conflict_count": _candidate_conflict_count(layout),
+            "selection_status": layout.candidate_selection.get("status") if layout else None,
+            "selection_selected_count": layout.candidate_selection.get("selected_count", 0) if layout else 0,
+            "active": bool(layout and layout.candidate_objects),
+        },
         "maneuver_validation": layout.maneuver_validation if layout else None,
         "active_stall_type": asdict(site.stall),
         "unsupported_phase1_inputs": unsupported,
@@ -241,6 +251,7 @@ def _field_support(site: SiteSpec, layout: LayoutResult | None) -> dict[str, str
         "vehicles.design_vehicle": "parsed_not_enforced" if site.vehicle else "future",
         "parking.standard_perpendicular": "active",
         "parking.stall_type_candidate_selection": "active" if len(_stall_candidates(site)) > 1 else "available",
+        "parking.stall_type_segment_assignment": "active" if layout and layout.stall_assignment_attempts else ("available" if len(_stall_candidates(site)) > 1 else "future"),
         "parking.angled_maneuver_proxy": _angled_maneuver_status(site, layout),
         "parking.angled_main_aisle_generation": _angled_generation_status(site, layout),
         "parking.angled_branch_generation": _angled_branch_generation_status(site, layout),
@@ -270,6 +281,9 @@ def _field_support(site: SiteSpec, layout: LayoutResult | None) -> dict[str, str
         "constraints.swept_path": "future",
         "optimization.weights": "parsed_not_enforced" if site.optimization else "future",
         "optimization.score_breakdown": "active" if _phase1_main_aisle_active(layout) else "future",
+        "optimization.candidate_objects": "active" if layout and layout.candidate_objects else "future",
+        "optimization.candidate_conflict_matrix": "active" if layout and layout.candidate_objects else "future",
+        "optimization.shadow_candidate_selector": "active" if layout and layout.candidate_selection else "future",
         "diagnostics.report": "active",
         "diagnostics.debug_layers": "active",
     }
@@ -302,6 +316,7 @@ def _stall_access(layout: LayoutResult | None) -> list[dict[str, str | None]]:
             "stall_id": stall.id,
             "served_by_aisle_id": stall.served_by_aisle_id,
             "aisle_side": stall.aisle_side,
+            "stall_type_id": stall.stall_type_id,
         }
         for stall in layout.stalls
     ]
@@ -328,6 +343,12 @@ def _traffic_graph_status(layout: LayoutResult | None) -> str:
     return "active" if traffic_graph_summary(layout)["valid"] else "active_failed"
 
 
+def _candidate_conflict_count(layout: LayoutResult | None) -> int:
+    if not layout:
+        return 0
+    return sum(len(candidate.conflict_ids) for candidate in layout.candidate_objects) // 2
+
+
 def _maneuver_status(layout: LayoutResult | None) -> str:
     if not layout:
         return "future"
@@ -338,13 +359,13 @@ def _maneuver_status(layout: LayoutResult | None) -> str:
 
 
 def _angled_maneuver_status(site: SiteSpec, layout: LayoutResult | None) -> str:
-    if site.stall.family != "angled":
+    if not _has_active_stall_family(site, layout, "angled"):
         return "available"
     return _maneuver_status(layout)
 
 
 def _angled_generation_status(site: SiteSpec, layout: LayoutResult | None) -> str:
-    if site.stall.family != "angled":
+    if not _has_active_stall_family(site, layout, "angled"):
         return "available"
     if not layout:
         return "future"
@@ -352,8 +373,18 @@ def _angled_generation_status(site: SiteSpec, layout: LayoutResult | None) -> st
 
 
 def _angled_branch_generation_status(site: SiteSpec, layout: LayoutResult | None) -> str:
-    if site.stall.family != "angled":
+    branch_stall = layout.site.branch_stall if layout else site.branch_stall
+    if (branch_stall or site.stall).family != "angled":
         return "available"
     if not layout:
         return "future"
     return "active" if layout.selected_branches else "available"
+
+
+def _has_active_stall_family(site: SiteSpec, layout: LayoutResult | None, family: str) -> bool:
+    active_site = layout.site if layout else site
+    return any(
+        stall.family == family
+        for stall in (active_site.main_stall, active_site.branch_stall, active_site.stall)
+        if stall is not None
+    )

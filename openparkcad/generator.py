@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from itertools import product
 
+from openparkcad.candidate_snapshot import attach_candidate_snapshot
 from openparkcad.maneuver_validation import apply_maneuver_filter
 from openparkcad.models import AngleAttempt, LayoutResult, SiteSpec, StallSpec
 from openparkcad.phase1_candidates import iter_phase1_candidates
@@ -12,27 +14,63 @@ from openparkcad.traffic_graph import build_traffic_graph, validate_traffic_grap
 
 def generate_layout(site: SiteSpec) -> LayoutResult:
     candidates = _candidate_stalls(site)
-    if len(candidates) <= 1:
-        selected_site = _site_with_stall(site, candidates[0])
+    assignments = _candidate_stall_assignments(site)
+    if len(assignments) <= 1:
+        selected_site = _site_with_stall_assignment(site, candidates[0], candidates[0])
         layout = _generate_layout_for_site(selected_site)
         object.__setattr__(layout, "site", replace(selected_site, stall_candidates=candidates))
         object.__setattr__(layout, "selected_stall_type_id", candidates[0].id)
+        object.__setattr__(layout, "selected_stall_assignment", _assignment_dict(candidates[0], candidates[0]))
         object.__setattr__(layout, "stall_type_attempts", [_stall_type_attempt(layout, selected=True)])
-        return layout
+        object.__setattr__(layout, "stall_assignment_attempts", [_stall_assignment_attempt(layout, selected=True)])
+        return attach_candidate_snapshot(layout)
 
-    layouts = [_generate_layout_for_site(_site_with_stall(site, stall)) for stall in candidates]
+    layouts = [
+        _generate_layout_for_site(_site_with_stall_assignment(site, main_stall, branch_stall))
+        for main_stall, branch_stall in assignments
+    ]
     valid_layouts = [layout for layout in layouts if _graph_valid(layout)]
     best = max(valid_layouts or layouts, key=score_total)
-    selected_site = replace(site, stall=best.site.stall, angle_degrees=best.site.stall.allowed_angles[0], stall_candidates=candidates)
+    selected_main = best.site.main_stall or best.site.stall
+    selected_branch = best.site.branch_stall or selected_main
+    selected_site = replace(
+        site,
+        stall=selected_main,
+        main_stall=selected_main,
+        branch_stall=selected_branch,
+        angle_degrees=selected_main.allowed_angles[0],
+        stall_candidates=candidates,
+    )
     object.__setattr__(best, "site", selected_site)
-    object.__setattr__(best, "selected_stall_type_id", best.site.stall.id)
+    object.__setattr__(best, "selected_stall_type_id", selected_main.id if selected_main.id == selected_branch.id else None)
+    object.__setattr__(best, "selected_stall_assignment", _assignment_dict(selected_main, selected_branch))
     object.__setattr__(
         best,
         "stall_type_attempts",
-        [_stall_type_attempt(layout, selected=layout.site.stall.id == best.site.stall.id) for layout in layouts],
+        [
+            _stall_type_attempt(
+                layout,
+                selected=(layout.site.main_stall or layout.site.stall).id == selected_main.id
+                and (layout.site.branch_stall or layout.site.stall).id == selected_branch.id,
+            )
+            for layout in layouts
+            if (layout.site.main_stall or layout.site.stall).id == (layout.site.branch_stall or layout.site.stall).id
+        ],
+    )
+    object.__setattr__(
+        best,
+        "stall_assignment_attempts",
+        [
+            _stall_assignment_attempt(
+                layout,
+                selected=_assignment_dict(layout.site.main_stall or layout.site.stall, layout.site.branch_stall or layout.site.stall)
+                == _assignment_dict(selected_main, selected_branch),
+            )
+            for layout in layouts
+        ],
     )
     object.__setattr__(best, "unsupported_phase1_inputs", phase1_unsupported_inputs(selected_site))
-    return best
+    return attach_candidate_snapshot(best)
 
 
 def _generate_layout_for_site(site: SiteSpec) -> LayoutResult:
@@ -109,13 +147,30 @@ def _candidate_stalls(site: SiteSpec) -> tuple[StallSpec, ...]:
     return site.stall_candidates or (site.stall,)
 
 
-def _site_with_stall(site: SiteSpec, stall: StallSpec) -> SiteSpec:
+def _candidate_stall_assignments(site: SiteSpec) -> tuple[tuple[StallSpec, StallSpec], ...]:
+    candidates = _candidate_stalls(site)
+    if len(candidates) <= 1:
+        return ((candidates[0], candidates[0]),)
+    return tuple(product(candidates, candidates))
+
+
+def _site_with_stall_assignment(site: SiteSpec, main_stall: StallSpec, branch_stall: StallSpec) -> SiteSpec:
     return replace(
         site,
-        stall=stall,
-        angle_degrees=stall.allowed_angles[0],
+        stall=main_stall,
+        main_stall=main_stall,
+        branch_stall=branch_stall,
+        angle_degrees=main_stall.allowed_angles[0],
         stall_candidates=(),
     )
+
+
+def _assignment_dict(main_stall: StallSpec, branch_stall: StallSpec) -> dict[str, str]:
+    return {
+        "main": main_stall.id,
+        "branch": branch_stall.id,
+        "connector": branch_stall.id,
+    }
 
 
 def _stall_type_attempt(layout: LayoutResult, selected: bool) -> dict[str, object]:
@@ -132,6 +187,33 @@ def _stall_type_attempt(layout: LayoutResult, selected: bool) -> dict[str, objec
         "unsupported_phase1_inputs": list(layout.unsupported_phase1_inputs),
         "selected": selected,
     }
+
+
+def _stall_assignment_attempt(layout: LayoutResult, selected: bool) -> dict[str, object]:
+    main_stall = layout.site.main_stall or layout.site.stall
+    branch_stall = layout.site.branch_stall or main_stall
+    return {
+        "main_stall_type_id": main_stall.id,
+        "branch_stall_type_id": branch_stall.id,
+        "connector_stall_type_id": branch_stall.id,
+        "stall_type_counts": _stall_type_counts(layout),
+        "stall_count": layout.stall_count,
+        "score_total": score_total(layout),
+        "graph_valid": _graph_valid(layout),
+        "graph_errors": list(layout.graph_validation.get("errors", [])),
+        "maneuver_valid": bool(layout.maneuver_validation.get("valid", False)),
+        "maneuver_invalid_count": len(layout.maneuver_validation.get("invalid_stalls", [])),
+        "unsupported_phase1_inputs": list(layout.unsupported_phase1_inputs),
+        "selected": selected,
+    }
+
+
+def _stall_type_counts(layout: LayoutResult) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for stall in layout.stalls:
+        stall_type_id = stall.stall_type_id or layout.site.stall.id
+        counts[stall_type_id] = counts.get(stall_type_id, 0) + 1
+    return counts
 
 
 def _with_score(layout: LayoutResult) -> LayoutResult:

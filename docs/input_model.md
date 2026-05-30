@@ -979,6 +979,11 @@ report maneuver_validation              active in JSON report
 report maneuver_validation rule_counts  active in JSON report
 report selected_stall_type_id           active in JSON report
 report stall_type_attempts              active in JSON report
+report selected_stall_assignment        active in JSON report
+report stall_assignment_attempts        active in JSON report
+report candidate_snapshot               active in JSON report
+report candidate_snapshot conflict_matrix active in JSON report
+report candidate_snapshot selection     active as shadow selector report
 report attempt graph rejection           active in JSON report
 diagnostics                             active as reporting structure
 ```

@@ -57,6 +57,8 @@ class SiteSpec:
     obstacles: list[Polygon] = field(default_factory=list)
     stall: StallSpec = field(default_factory=StallSpec)
     stall_candidates: tuple[StallSpec, ...] = field(default_factory=tuple)
+    main_stall: StallSpec | None = None
+    branch_stall: StallSpec | None = None
     aisle_width: float = 6.0
     angle_degrees: float = 0.0
     candidate_angles: tuple[float, ...] = (0.0,)
@@ -85,6 +87,7 @@ class ParkingStall:
     angle_degrees: float
     served_by_aisle_id: str | None = None
     aisle_side: str | None = None
+    stall_type_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -114,6 +117,19 @@ class AngleAttempt:
 
 
 @dataclass(frozen=True)
+class CandidateObject:
+    id: str
+    kind: str
+    role: str
+    status: str
+    geometry: Polygon | None = None
+    parent_ids: tuple[str, ...] = ()
+    conflict_ids: tuple[str, ...] = ()
+    score_features: dict[str, float] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class LayoutResult:
     site: SiteSpec
     stalls: list[ParkingStall]
@@ -132,9 +148,13 @@ class LayoutResult:
     selected_connectors: list[dict[str, Any]] = field(default_factory=list)
     selected_stall_type_id: str | None = None
     stall_type_attempts: list[dict[str, Any]] = field(default_factory=list)
+    selected_stall_assignment: dict[str, str] = field(default_factory=dict)
+    stall_assignment_attempts: list[dict[str, Any]] = field(default_factory=list)
     score: dict[str, float] = field(default_factory=dict)
     graph_validation: dict[str, Any] = field(default_factory=dict)
     maneuver_validation: dict[str, Any] = field(default_factory=dict)
+    candidate_objects: list[CandidateObject] = field(default_factory=list)
+    candidate_selection: dict[str, Any] = field(default_factory=dict)
     unsupported_phase1_inputs: list[dict[str, str]] = field(default_factory=list)
 
     @property

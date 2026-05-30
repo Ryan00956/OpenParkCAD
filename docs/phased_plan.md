@@ -533,8 +533,36 @@ Current rules:
 - `stall_type_attempts` records each candidate's family, allowed angles, stall
   count, score, graph validity, maneuver validity, and unsupported inputs.
 
-This is still a small enumerative comparison, not a mixed-module optimizer. It
-does not yet combine perpendicular and angled stalls in the same layout.
+This is still a small enumerative comparison, not a global mixed-module
+optimizer. Phase 3F-1 extends it to compare main/branch assignments.
+
+### Phase 3F-1: Stall Type Assignment by Aisle Role
+
+The solver can now compare enabled stall types separately for main aisles and
+branch/connector aisles.
+
+Current rules:
+
+- The solver enumerates `main_stall_type x branch_stall_type` for enabled stall
+  candidates.
+- Main-aisle stalls use the selected main stall type.
+- Branch-side and connector-side stalls use the selected branch stall type.
+- Every generated stall records `stall_type_id`, so maneuver validation can
+  dispatch the correct rule per stall.
+- Mixed perpendicular/angled layouts are allowed when both candidate types are
+  enabled and the geometry, maneuver, traffic graph, and score pipeline accepts
+  the assignment.
+- The selected layout is still the graph-valid assignment with the highest
+  score, with highest-scoring invalid fallback if every assignment fails graph
+  validation.
+- The report includes `selected_stall_assignment` and
+  `stall_assignment_attempts`.
+- `stall_assignment_attempts` records the main, branch, and connector stall
+  type ids, stall type counts, stall count, score, graph validity, maneuver
+  validity, and unsupported inputs.
+
+This is not yet per-individual-stall optimization. It only chooses by aisle
+role, so a single branch still uses one stall module along its sides.
 
 ## Phase 4: Candidate Generation and Optimization
 
@@ -566,6 +594,67 @@ Optimization should consider:
 - OR-Tools or another solver selects compatible objects,
 - the objective is documented,
 - the report shows why the selected layout won.
+
+### Phase 4A-1: Candidate Object Snapshot
+
+The solver now emits a first candidate-object layer without changing layout
+selection behavior.
+
+Current rules:
+
+- `CandidateObject` is the shared data shape for future optimization objects.
+- Selected aisles and stalls are represented as selected candidate objects with
+  geometry, parent ids, and score features.
+- Main-aisle attempts are represented as evaluated aisle-skeleton candidates.
+- Branch and connector diagnostics are represented as selected, rejected, or
+  invalid aisle-skeleton candidates.
+- The JSON report includes `candidate_snapshot` with version, object count,
+  status counts, and serialized candidate objects.
+
+This is deliberately a snapshot layer, not yet an optimizer. Existing greedy
+selection still decides the final layout.
+
+### Phase 4A-2: Candidate Conflict Matrix
+
+The candidate snapshot now includes a first explicit geometry conflict layer.
+
+Current rules:
+
+- Branch and connector attempt diagnostics carry geometry when a concrete
+  candidate polygon was constructed.
+- Candidate objects with geometry are checked pairwise for area overlap.
+- Overlapping objects record each other in `conflict_ids`.
+- The JSON report includes `candidate_snapshot.conflict_count` and
+  `candidate_snapshot.conflict_matrix`.
+- Conflict records include left object id, right object id, conflict type, and
+  overlap area.
+- Intentional aisle-to-aisle parent/connector overlaps are ignored, so a branch
+  joining its parent main aisle is not treated as a conflict.
+
+This is still diagnostic. The next optimizer phase can use the matrix as an
+input, but selection is not yet solved from it.
+
+### Phase 4B-1: Shadow Candidate Selector
+
+The solver now runs a first report-only selector over the candidate-object
+layer.
+
+Current rules:
+
+- The selector reads candidate objects and their `conflict_ids`.
+- Only branch and connector `aisle_skeleton` candidates with geometry are
+  eligible in this first pass.
+- Candidates are scored by a simple shadow score based on stall delta,
+  connector turnaround benefit, and aisle geometry area.
+- Candidates with non-positive shadow score are rejected.
+- Candidates that conflict with an already selected candidate are rejected with
+  `conflicts_with_selected_candidate`.
+- The selected shadow set is guaranteed to contain no pair listed in the
+  conflict matrix.
+- The JSON report includes `candidate_snapshot.selection`.
+
+This remains `shadow_only`: it proves the candidate layer can drive a decision,
+but it does not yet replace the greedy layout generator's final result.
 
 ## Phase 5: Operational Quality
 

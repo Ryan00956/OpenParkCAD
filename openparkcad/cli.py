@@ -4,6 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
+from openparkcad.candidate_snapshot import candidate_snapshot_report
 from openparkcad.diagnostics import build_input_diagnostics
 from openparkcad.exporter_dxf import write_dxf
 from openparkcad.exporter_svg import write_svg
@@ -67,8 +68,11 @@ def _write_report(layout, path: str) -> None:
         "selected_branches": layout.selected_branches,
         "selected_connectors": layout.selected_connectors,
         "selected_stall_type_id": layout.selected_stall_type_id,
+        "selected_stall_assignment": layout.selected_stall_assignment,
         "stall_type_attempts": layout.stall_type_attempts,
+        "stall_assignment_attempts": layout.stall_assignment_attempts,
         "score": layout.score,
+        "candidate_snapshot": candidate_snapshot_report(layout),
         "maneuver_validation": layout.maneuver_validation,
         "unsupported_phase1_inputs": layout.unsupported_phase1_inputs,
         "aisles": [
@@ -86,6 +90,7 @@ def _write_report(layout, path: str) -> None:
                 "id": stall.id,
                 "served_by_aisle_id": stall.served_by_aisle_id,
                 "aisle_side": stall.aisle_side,
+                "stall_type_id": stall.stall_type_id,
             }
             for stall in layout.stalls
         ],
@@ -112,11 +117,26 @@ def _write_report(layout, path: str) -> None:
             "length": layout.site.stall.length,
             "allowed_angles": list(layout.site.stall.allowed_angles),
         },
+        "stall_assignment": {
+            "main": _stall_spec_report(layout.site.main_stall or layout.site.stall),
+            "branch": _stall_spec_report(layout.site.branch_stall or layout.site.main_stall or layout.site.stall),
+            "connector": _stall_spec_report(layout.site.branch_stall or layout.site.main_stall or layout.site.stall),
+        },
         "aisle_width": layout.site.aisle_width,
         "traffic_graph": traffic_graph_report(layout),
         "input_diagnostics": build_input_diagnostics(layout.site, layout),
     }
     target.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
+def _stall_spec_report(stall) -> dict[str, object]:
+    return {
+        "id": stall.id,
+        "family": stall.family,
+        "width": stall.width,
+        "length": stall.length,
+        "allowed_angles": list(stall.allowed_angles),
+    }
 
 
 if __name__ == "__main__":
