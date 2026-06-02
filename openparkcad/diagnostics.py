@@ -94,6 +94,8 @@ def build_input_diagnostics(site: SiteSpec, layout: LayoutResult | None = None) 
             "branch_start_step": site.optimization.get("branch_start_step", "auto"),
             "max_branches": site.optimization.get("max_branches", 2),
             "enable_connectors": site.optimization.get("enable_connectors", True),
+            "connector_allow_outer_stall_row": site.optimization.get("connector_allow_outer_stall_row", True),
+            "connector_inset_depths": site.optimization.get("connector_inset_depths", "auto"),
         },
         "stall_type_selection": {
             "selected_stall_type_id": layout.selected_stall_type_id if layout else site.stall.id,
@@ -108,10 +110,43 @@ def build_input_diagnostics(site: SiteSpec, layout: LayoutResult | None = None) 
             "version": "phase4b-1",
             "object_count": len(layout.candidate_objects) if layout else 0,
             "conflict_count": _candidate_conflict_count(layout),
+            "connector_candidate_count": _connector_candidate_count(layout),
+            "synthetic_connector_candidate_count": _synthetic_connector_candidate_count(layout),
+            "selection_version": layout.candidate_selection.get("version") if layout else None,
             "selection_status": layout.candidate_selection.get("status") if layout else None,
             "selection_selected_count": layout.candidate_selection.get("selected_count", 0) if layout else 0,
+            "selection_selected_branch_count": layout.candidate_selection.get("selected_branch_count", 0) if layout else 0,
+            "selection_selected_connector_count": layout.candidate_selection.get("selected_connector_count", 0) if layout else 0,
+            "selection_selected_bundle_count": layout.candidate_selection.get("selected_bundle_count", 0) if layout else 0,
             "active": bool(layout and layout.candidate_objects),
         },
+        "candidate_network_preview": {
+            "version": layout.candidate_network_preview.get("version") if layout else None,
+            "status": layout.candidate_network_preview.get("status") if layout else None,
+            "aisle_count": layout.candidate_network_preview.get("aisle_count", 0) if layout else 0,
+            "shadow_aisle_count": layout.candidate_network_preview.get("shadow_aisle_count", 0) if layout else 0,
+            "shadow_turnaround_count": layout.candidate_network_preview.get("shadow_turnaround_count", 0) if layout else 0,
+            "connector_count": layout.candidate_network_preview.get("connector_count", 0) if layout else 0,
+            "loop_connector_count": layout.candidate_network_preview.get("loop_connector_count", 0) if layout else 0,
+            "suppressed_turnaround_count": layout.candidate_network_preview.get("suppressed_turnaround_count", 0) if layout else 0,
+            "valid_no_internal_conflicts": layout.candidate_network_preview.get("valid_no_internal_conflicts") if layout else None,
+            "validation_valid": _preview_validation_valid(layout),
+            "validation_errors": _preview_validation_errors(layout),
+            "active": bool(layout and layout.candidate_network_preview),
+        },
+        "candidate_layout_preview": {
+            "version": layout.candidate_layout_preview.get("version") if layout else None,
+            "status": layout.candidate_layout_preview.get("status") if layout else None,
+            "aisle_count": layout.candidate_layout_preview.get("aisle_count", 0) if layout else 0,
+            "stall_count": layout.candidate_layout_preview.get("stall_count", 0) if layout else 0,
+            "score_total": _layout_preview_score_total(layout),
+            "score_delta": _layout_preview_score_delta(layout),
+            "promotion_eligible": _layout_preview_promotion_eligible(layout),
+            "validation_valid": _layout_preview_validation_valid(layout),
+            "validation_errors": _layout_preview_validation_errors(layout),
+            "active": bool(layout and layout.candidate_layout_preview),
+        },
+        "candidate_layout_promotion": layout.candidate_layout_promotion if layout else {},
         "maneuver_validation": layout.maneuver_validation if layout else None,
         "active_stall_type": asdict(site.stall),
         "unsupported_phase1_inputs": unsupported,
@@ -276,6 +311,7 @@ def _field_support(site: SiteSpec, layout: LayoutResult | None) -> dict[str, str
         "constraints.full_aisle_graph_reachability": _traffic_graph_status(layout),
         "constraints.maneuver_access_envelope": _maneuver_status(layout),
         "constraints.turning_sweep_proxy": _maneuver_status(layout),
+        "constraints.maneuver_l_shape_fallback": _maneuver_status(layout),
         "constraints.maneuver_rule_dispatch": _maneuver_status(layout),
         "constraints.turning_radius": "future",
         "constraints.swept_path": "future",
@@ -284,7 +320,15 @@ def _field_support(site: SiteSpec, layout: LayoutResult | None) -> dict[str, str
         "optimization.candidate_objects": "active" if layout and layout.candidate_objects else "future",
         "optimization.candidate_conflict_matrix": "active" if layout and layout.candidate_objects else "future",
         "optimization.shadow_candidate_selector": "active" if layout and layout.candidate_selection else "future",
+        "optimization.candidate_network_preview": "active" if layout and layout.candidate_network_preview else "future",
+        "optimization.candidate_shadow_branch_turnarounds": "active" if _shadow_turnarounds_active(layout) else "future",
+        "optimization.connector_inset_depths": "active" if layout and site.optimization.get("enable_connectors", True) else "future",
+        "optimization.connector_l_shape_end_stalls": "active" if layout and site.optimization.get("enable_connectors", True) else "future",
+        "optimization.candidate_layout_preview": "active" if layout and layout.candidate_layout_preview else "future",
+        "optimization.candidate_layout_preview_scoring": "active" if _layout_preview_comparison(layout) else "future",
+        "optimization.promote_candidate_layout_preview": _candidate_layout_promotion_status(layout),
         "diagnostics.report": "active",
+        "diagnostics.svg_candidate_network_preview": "active" if layout and layout.candidate_network_preview else "future",
         "diagnostics.debug_layers": "active",
     }
     return support
@@ -301,7 +345,11 @@ def _stall_candidates(site: SiteSpec):
 
 
 def _phase1_main_aisle_active(layout: LayoutResult | None) -> bool:
-    return bool(layout and layout.generation_mode == "phase1_main_aisle" and layout.main_entrance_id)
+    return bool(
+        layout
+        and layout.generation_mode in {"phase1_main_aisle", "candidate_layout_promoted"}
+        and layout.main_entrance_id
+    )
 
 
 def _all_stalls_have_aisles(layout: LayoutResult | None) -> bool:
@@ -347,6 +395,113 @@ def _candidate_conflict_count(layout: LayoutResult | None) -> int:
     if not layout:
         return 0
     return sum(len(candidate.conflict_ids) for candidate in layout.candidate_objects) // 2
+
+
+def _connector_candidate_count(layout: LayoutResult | None) -> int:
+    if not layout:
+        return 0
+    return len([candidate for candidate in layout.candidate_objects if candidate.kind == "aisle_skeleton" and candidate.role == "connector"])
+
+
+def _synthetic_connector_candidate_count(layout: LayoutResult | None) -> int:
+    if not layout:
+        return 0
+    return len(
+        [
+            candidate
+            for candidate in layout.candidate_objects
+            if candidate.kind == "aisle_skeleton"
+            and candidate.role == "connector"
+            and candidate.metadata.get("synthetic")
+        ]
+    )
+
+
+def _preview_validation_valid(layout: LayoutResult | None) -> bool | None:
+    if not layout:
+        return None
+    validation = layout.candidate_network_preview.get("validation")
+    if not isinstance(validation, dict):
+        return None
+    return bool(validation.get("valid"))
+
+
+def _preview_validation_errors(layout: LayoutResult | None) -> list[str]:
+    if not layout:
+        return []
+    validation = layout.candidate_network_preview.get("validation")
+    if not isinstance(validation, dict):
+        return []
+    errors = validation.get("errors", [])
+    if not isinstance(errors, list):
+        return []
+    return [str(item) for item in errors]
+
+
+def _layout_preview_validation_valid(layout: LayoutResult | None) -> bool | None:
+    if not layout:
+        return None
+    validation = layout.candidate_layout_preview.get("validation")
+    if not isinstance(validation, dict):
+        return None
+    return bool(validation.get("valid"))
+
+
+def _layout_preview_validation_errors(layout: LayoutResult | None) -> list[str]:
+    if not layout:
+        return []
+    validation = layout.candidate_layout_preview.get("validation")
+    if not isinstance(validation, dict):
+        return []
+    errors = validation.get("errors", [])
+    if not isinstance(errors, list):
+        return []
+    return [str(item) for item in errors]
+
+
+def _layout_preview_comparison(layout: LayoutResult | None) -> dict[str, Any]:
+    if not layout:
+        return {}
+    comparison = layout.candidate_layout_preview.get("comparison")
+    return comparison if isinstance(comparison, dict) else {}
+
+
+def _layout_preview_score_total(layout: LayoutResult | None) -> float | None:
+    if not layout:
+        return None
+    score = layout.candidate_layout_preview.get("score")
+    if not isinstance(score, dict) or not isinstance(score.get("total"), int | float):
+        return None
+    return float(score["total"])
+
+
+def _layout_preview_score_delta(layout: LayoutResult | None) -> float | None:
+    comparison = _layout_preview_comparison(layout)
+    value = comparison.get("score_delta")
+    return float(value) if isinstance(value, int | float) else None
+
+
+def _layout_preview_promotion_eligible(layout: LayoutResult | None) -> bool | None:
+    comparison = _layout_preview_comparison(layout)
+    value = comparison.get("promotion_eligible")
+    return bool(value) if isinstance(value, bool) else None
+
+
+def _candidate_layout_promotion_status(layout: LayoutResult | None) -> str:
+    if not layout:
+        return "future"
+    if layout.candidate_layout_promotion.get("status") == "promoted":
+        return "active"
+    if layout.candidate_layout_promotion.get("requested"):
+        return "active_rejected"
+    return "available"
+
+
+def _shadow_turnarounds_active(layout: LayoutResult | None) -> bool:
+    if not layout:
+        return False
+    count = layout.candidate_network_preview.get("shadow_turnaround_count")
+    return isinstance(count, int | float) and count > 0
 
 
 def _maneuver_status(layout: LayoutResult | None) -> str:

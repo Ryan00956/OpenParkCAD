@@ -13,11 +13,19 @@ def test_phase0_example_parses_core_fields():
     site = site_from_dict(data)
 
     assert site.source_format == "phase0"
-    assert site.name == "phase0 realistic input sample"
+    assert site.name == "phase0 large branch test sample"
     assert site.entrances[0].id == "main-gate"
     assert site.vehicle.id == "passenger-car"
     assert site.stall.id == "standard-90"
     assert site.aisle_width == 6.0
+    assert site.entrances[0].center == (43.0, 0.0)
+    assert site.optimization["max_branches"] == 2
+    assert site.optimization["enable_connectors"] is True
+    assert site.optimization["connector_allow_outer_stall_row"] is True
+    assert site.optimization["connector_inset_depths"] == [0.0, 2.65, 5.3, 7.95]
+    assert site.optimization["connector_allow_l_shape_end_stalls"] is True
+    assert site.optimization["maneuver_l_shape_fallback"] is True
+    assert site.optimization["promote_candidate_layout_preview"] is True
     assert site.candidate_angles == (0.0, 15.0, 30.0, 45.0, 60.0, 75.0, 90.0)
     assert len(site.site_features) == 2
 
@@ -112,7 +120,10 @@ def test_phase0_diagnostics_mark_main_aisle_connection_active_with_layout():
 
     diagnostics = build_input_diagnostics(site, layout)
 
-    assert layout.generation_mode == "phase1_main_aisle"
+    assert layout.generation_mode == "candidate_layout_promoted"
+    assert layout.stall_count == 83
+    assert layout.candidate_layout_promotion["status"] == "promoted"
+    assert layout.maneuver_validation["rule_counts"]["perpendicular_90_l_shape_proxy"] == 2
     assert diagnostics["field_support"]["entrances"] == "active"
     assert diagnostics["field_support"]["constraints.entrance_to_main_aisle"] == "active"
     assert diagnostics["field_support"]["constraints.dead_end_turnaround"] == "active"
@@ -122,7 +133,12 @@ def test_phase0_diagnostics_mark_main_aisle_connection_active_with_layout():
     assert diagnostics["heading_selection"]["selected_heading_degrees"] is not None
     assert diagnostics["heading_selection"]["selected_entrance_offset"] is not None
     assert diagnostics["branch_selection"]["enabled"] is True
+    assert diagnostics["branch_selection"]["connector_inset_depths"] == [0.0, 2.65, 5.3, 7.95]
     assert diagnostics["field_support"]["optimization.score_breakdown"] == "active"
+    assert diagnostics["field_support"]["optimization.promote_candidate_layout_preview"] == "active"
+    assert diagnostics["field_support"]["optimization.connector_inset_depths"] == "active"
+    assert diagnostics["field_support"]["optimization.connector_l_shape_end_stalls"] == "active"
+    assert diagnostics["field_support"]["constraints.maneuver_l_shape_fallback"] == "active"
     assert diagnostics["score"]["total"] == layout.score["total"]
     assert any(item["constraint"] == "entrance to main aisle" and item["status"] == "active" for item in diagnostics["constraint_status"])
 

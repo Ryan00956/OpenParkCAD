@@ -337,10 +337,16 @@ Current rules:
   accepted as a geometric candidate.
 - `optimization.connector_throat_length` controls the clear space kept near
   each connector-to-branch junction. It defaults to one aisle width.
+- If `optimization.connector_allow_l_shape_end_stalls` is enabled, the generator
+  may also try connector end stalls inside that throat and rely on the
+  maneuver validator's one-sided L-shaped turning proxy.
 - The generator tries both connector sides, marked as `outer` and `inner`.
 - A connector-side stall must fit inside the usable site.
-- A connector-side stall must avoid existing aisles, existing stalls, and the
-  connector aisle itself.
+- A connector-side stall must avoid the active aisle network and the connector
+  aisle itself. When a connector wins, endpoint branch aisles are trimmed to the
+  connector boundary before connector stalls are generated.
+- Connector stalls can replace older endpoint branch stalls if the resulting
+  candidate still improves the score.
 - A connector-side stall is counted only if it is served by the connector aisle.
 - The final candidate must still pass traffic graph validation.
 - The final candidate must improve the score before it is kept.
@@ -415,6 +421,10 @@ Current rules:
 - The expanded envelope must stay inside usable site area, so side obstacles,
   end walls, and boundary clips can invalidate a stall even when its immediate
   front access is clear.
+- For 90-degree perpendicular stalls, `optimization.maneuver_l_shape_fallback`
+  enables a one-sided L-shaped fallback. If the full symmetric turning proxy
+  fails, the validator tries the front access rectangle plus only the start or
+  end side of the turn buffer.
 - Invalid stalls are filtered before traffic graph validation and scoring.
 
 The report includes `turn_buffer_length`,
@@ -431,9 +441,11 @@ instead of assuming every future stall type will reuse the same geometry.
 
 Current rules:
 
-- `perpendicular_90_proxy` is the only active rule.
+- `perpendicular_90_proxy` is the primary active rule.
 - The active rule uses the Phase 3A access envelope and Phase 3B turning-sweep
   proxy.
+- `perpendicular_90_l_shape_proxy` is reported when a 90-degree stall passes
+  through the one-sided fallback instead of the full symmetric turning proxy.
 - `angled`, `parallel`, `t_end`, and non-90 perpendicular rules are recognized
   as future maneuver rules.
 - Unsupported future rules return explicit invalid reasons such as
@@ -655,6 +667,288 @@ Current rules:
 
 This remains `shadow_only`: it proves the candidate layer can drive a decision,
 but it does not yet replace the greedy layout generator's final result.
+
+### Phase 4B-2A: Candidate Network Preview Report
+
+The solver now turns the shadow selector result into a report-only road-network
+preview.
+
+Current rules:
+
+- `candidate_network_preview` starts with the current selected main aisle and
+  turnaround aisle.
+- Shadow-selected branch and connector skeleton candidates are appended as
+  preview aisles.
+- Preview aisles include source candidate id, source geometry, role, parent ids,
+  area, score features, and compact metadata.
+- The preview reports whether the chosen preview aisles have internal conflicts
+  according to candidate `conflict_ids`.
+- The JSON report includes top-level `candidate_network_preview`.
+- Input diagnostics include the preview version, preview-only status, aisle
+  count, shadow aisle count, and no-internal-conflict flag.
+
+This is still not the final generated layout. Stalls, DXF, and SVG continue to
+come from the existing generator until the preview network is promoted in a
+later Phase 4B step.
+
+### Phase 4B-2B: SVG Candidate Network Preview Layer
+
+The SVG preview now draws the candidate network preview as a debug overlay.
+
+Current rules:
+
+- The SVG bounds include candidate preview aisle geometry.
+- Preview aisles are drawn in a `<g id="candidate-network-preview">` group.
+- Preview aisles use translucent dashed polygons so they can be compared with
+  the current generated layout.
+- Preview aisle labels use their preview ids, such as `PN-AISLE-001`.
+- The layer is diagnostic only; DXF output and generated stalls still come from
+  the current selected layout.
+
+### Phase 4B-3: Candidate Network Preview Validation
+
+The candidate network preview is now treated as a temporary layout object for
+report-level validation.
+
+Current rules:
+
+- Preview aisles are converted into a temporary `LayoutResult` without stalls.
+- The preview runs an internal-conflict check from candidate `conflict_ids`.
+- The preview runs geometry containment against the usable site area.
+- The preview runs the existing traffic graph validation on preview aisle ids.
+- Validation output is stored in `candidate_network_preview.validation`.
+- Input diagnostics expose the preview validation status and errors.
+
+This still does not replace the official generated layout. It makes the preview
+network auditable before a later phase promotes it into layout generation.
+
+### Phase 4C-1: Candidate Layout Preview With Stalls
+
+The solver now builds a complete preview layout from the candidate network.
+
+Current rules:
+
+- `candidate_layout_preview` reuses preview aisles from
+  `candidate_network_preview`.
+- Current main-aisle stalls are copied into the preview layout and remapped to
+  preview aisle ids.
+- Shadow-selected branch and connector candidates contribute their generated
+  preview stalls through candidate metadata.
+- Preview stalls include geometry, source id, serving preview aisle id, aisle
+  side, stall type id, area, and source type.
+- The preview layout runs geometry containment, stall-to-aisle association,
+  maneuver validation, and traffic graph validation.
+- The JSON report includes top-level `candidate_layout_preview`.
+
+This is still preview-only. The official DXF/SVG layout and selected score are
+not replaced until a later phase promotes a valid preview layout.
+
+### Phase 4C-2A: Candidate Layout Preview Scoring
+
+The candidate layout preview now reports whether it is actually better than the
+current official layout before any promotion happens.
+
+Current rules:
+
+- `candidate_layout_preview.score` uses the same objective weights as the
+  official layout score.
+- Preview metrics include stall count, aisle area, heading delta, entrance
+  offset, branch count, and a conservative dead-end length estimate.
+- `candidate_layout_preview.comparison` reports the current layout score, the
+  preview score, stall delta, score delta, and validation status.
+- `promotion_eligible` is true only when the preview validates and its score is
+  not lower than the current official layout, and when promotion-only blockers
+  such as unresolved dead ends are absent.
+- This is still report-only. The official DXF/SVG layout is not replaced yet.
+
+### Phase 4C-2B: Controlled Candidate Layout Promotion
+
+The solver can now let a valid candidate preview replace the official generated
+layout, but only behind an explicit input flag.
+
+Current rules:
+
+- Promotion is disabled by default.
+- `optimization.promote_candidate_layout_preview = true` requests promotion.
+- A preview can be promoted only when
+  `candidate_layout_preview.comparison.promotion_eligible` is true.
+- Promotion eligibility requires valid preview geometry/maneuvers/traffic,
+  score not lower than the current layout, and no unresolved
+  `dead_end_without_turnaround` graph reports.
+- When promoted, official `aisles`, `stalls`, `score`, maneuver validation, and
+  graph validation come from the candidate preview.
+- `candidate_layout_promotion` reports whether promotion was not requested,
+  promoted, or rejected, including blocker reasons.
+- DXF, SVG, and the top-level report use the promoted layout only after the
+  eligibility gate passes.
+
+The bundled large branch example now enables this gate so the promoted U-shaped
+candidate layout appears as the official output rather than only as an orange
+preview overlay.
+
+### Phase 4C-3A: Shadow Branch Turnaround Expansion
+
+The candidate network preview now expands unconnected shadow-selected branches
+into explicit branch aisle and turnaround aisle pieces.
+
+Current rules:
+
+- Branch candidate diagnostics preserve separate branch-aisle geometry and
+  branch-turnaround geometry.
+- The candidate conflict matrix can still use the combined branch drivable
+  geometry for compatibility checks.
+- The preview network draws and validates the branch aisle and its turnaround
+  as separate aisles.
+- Turnaround parent links use the unique source candidate id, not only the
+  reused branch source id, so multiple shadow branch trials can coexist safely.
+- Branches connected by a shadow connector do not get an extra end turnaround
+  preview aisle.
+- Promotion no longer rejects an otherwise valid shadow branch merely because
+  its turnaround was hidden inside the branch candidate polygon.
+
+### Phase 4C-3B: Dependency-Aware Shadow Selection
+
+The shadow selector now applies basic road-network selection rules instead of
+only picking the highest-scoring non-conflicting objects.
+
+Current rules:
+
+- Branch candidates are selected before connector candidates.
+- Shadow branch selection respects `optimization.max_branches`.
+- Branch candidates with positive score can still be rejected with
+  `exceeds_max_branches`.
+- Alternative branch candidates with the same branch source id are mutually
+  exclusive; later alternatives are rejected with
+  `duplicate_branch_source_selected`.
+- Connector candidates require both endpoint branch source ids to already be in
+  the selected branch set.
+- Connectors rejected for missing endpoint branches report
+  `connector_dependency_not_selected` and list missing branch source ids.
+- Selected connector candidates still must not conflict with the already
+  selected candidate set.
+- The selector report includes selected branch count, selected connector count,
+  max branch limit, and selected branch source ids.
+
+### Phase 4C-3C: Loop Bundle Shadow Selection
+
+The shadow selector can now compare simple loop bundles against standalone
+branch candidates.
+
+Current rules:
+
+- A loop bundle contains two branch candidates plus one connector candidate.
+- The connector's `connects` metadata determines the required branch source ids.
+- The selector uses the best available branch candidate for each connector
+  endpoint source id.
+- A loop bundle is ignored if either endpoint branch source is missing or if
+  the bundle has internal conflicts.
+- Bundle score is the sum of the two branch scores, connector score, and a
+  small loop bonus.
+- Bundles and standalone branches compete in one sorted selection pass.
+- A winning bundle still emits ordinary selected candidate ids, so downstream
+  preview generation can continue to consume `selected_ids`.
+- The selector report includes eligible bundle count, selected bundle count, and
+  selected bundle details.
+
+### Phase 4C-4A: Shadow Connector Candidate Availability
+
+Connector candidates are now easier for the bundle selector to see.
+
+Current rules:
+
+- If `optimization.enable_connectors` is true, the candidate snapshot can
+  synthesize report-only connector aisle skeletons between compatible branch
+  candidate sources.
+- Synthetic connectors are tried between adjacent same-side branch sources
+  using the best branch candidate available for each source id.
+- A generated connector candidate still wins over a synthetic duplicate for the
+  same two branch source ids.
+- Synthetic connectors enter the same conflict matrix, bundle selector, network
+  preview, layout preview, and promotion gate as generated connector
+  candidates.
+- Synthetic connectors do not add connector-side stalls yet; they only test
+  circulation connectivity and turnaround removal.
+- Input diagnostics now report connector candidate counts and synthetic
+  connector candidate counts.
+
+### Phase 4C-4B: Connector Preview Turnaround Suppression Report
+
+The candidate network preview now explains how connector-selected loop
+circulation changes branch dead-end handling.
+
+Current rules:
+
+- The network preview reports connector count and loop connector count.
+- The preview reports branch source ids connected by selected connector
+  candidates.
+- A branch source connected by a selected connector does not receive a generated
+  shadow end-turnaround preview aisle.
+- The preview reports suppressed branch turnaround source ids and suppressed
+  turnaround count.
+- Input diagnostics expose connector and suppressed-turnaround counts so a user
+  can tell whether a U-shaped preview is really being treated as a loop.
+
+### Phase 4C-4C: Inset Connector Placement For Outer Stall Rows
+
+U-shaped connectors no longer have to sit directly against the branch end or
+site edge.
+
+Current rules:
+
+- `optimization.connector_allow_outer_stall_row` defaults to true.
+- When enabled, same-side connector geometry is inset from the branch end by up
+  to one connector-side stall depth.
+- The inset is capped so the connector still stays within the branch length.
+- Connector-side stall generation then has room to place stalls on the outer
+  side of the U-shaped connector.
+- The same inset rule is used for generated connector candidates and synthetic
+  shadow connector candidates.
+- This is still a conservative single-position rule, not a full connector
+  offset search.
+
+### Phase 4C-4D: Connector Inset Depth Candidate Search
+
+Connector placement now compares multiple inset depths instead of using one
+fixed position.
+
+Current rules:
+
+- `optimization.connector_inset_depths` can explicitly list connector setback
+  distances from the branch end.
+- If no list is provided and `connector_allow_outer_stall_row` is true, the
+  solver tries a small default set: flush, half stall depth, one stall depth,
+  and one-and-a-half stall depths.
+- Every inset is capped by the usable branch length so the connector cannot be
+  pushed past the branch throat.
+- Generated connector candidates and synthetic shadow connector candidates use
+  the same inset-depth list.
+- Connector diagnostics, candidate objects, network preview metadata, and
+  `selected_connectors` report `connector_inset_depth`.
+- Candidate selection can distinguish multiple connector candidates for the
+  same pair of branches by their inset depth.
+
+### Phase 4C-4E: Connector End-Stall Maneuver Fallback
+
+Connector loops can now use the maneuver layer to decide whether end-adjacent
+connector stalls are valid instead of blocking them purely with a rectangular
+throat rule.
+
+Current rules:
+
+- `optimization.maneuver_l_shape_fallback` defaults to true for 90-degree
+  perpendicular stalls.
+- `optimization.connector_allow_l_shape_end_stalls` defaults to the same value.
+- When a connector is evaluated, endpoint branch aisles are trimmed to the
+  connector boundary before connector-side stalls are generated.
+- Connector-side stalls are allowed to replace older endpoint branch stalls if
+  the net candidate still scores better.
+- Candidate layout conflict resolution prioritizes selected connector stalls
+  over stale branch-end stalls so the promoted preview matches the selected
+  loop geometry.
+- Reports expose the fallback through
+  `maneuver_validation.rule_counts.perpendicular_90_l_shape_proxy` and
+  per-stall `maneuver_variant` values such as `l_shape_start` and
+  `l_shape_end`.
 
 ## Phase 5: Operational Quality
 

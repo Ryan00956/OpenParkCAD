@@ -61,9 +61,9 @@ def validate_maneuvers(layout: LayoutResult) -> dict[str, Any]:
 
     for stall in layout.stalls:
         rule = _rule_for_stall(layout.site, stall)
-        rule_counts[rule.id] = rule_counts.get(rule.id, 0) + 1
         envelope_result = rule.evaluate(context, stall)
         if envelope_result["envelope"] is None:
+            _increment_rule_count(rule_counts, rule.id)
             invalid.append(
                 {
                     "stall_id": stall.id,
@@ -76,36 +76,27 @@ def validate_maneuvers(layout: LayoutResult) -> dict[str, Any]:
             )
             continue
 
-        envelope = envelope_result["envelope"]
-        turn_proxy = envelope_result["turn_proxy"]
-        drivable_ratio = _coverage_ratio(envelope, drivable)
-        usable_ratio = _coverage_ratio(envelope, usable)
-        turn_drivable_ratio = _coverage_ratio(turn_proxy, drivable)
-        turn_usable_ratio = _coverage_ratio(turn_proxy, usable)
-        min_ratio = float(envelope_result["minimum_coverage_ratio"])
-        min_turn_ratio = float(envelope_result["minimum_turn_coverage_ratio"])
-        record = {
-            "stall_id": stall.id,
-            "stall_type_id": stall.stall_type_id,
-            "served_by_aisle_id": stall.served_by_aisle_id,
-            "rule_id": rule.id,
-            "rule_status": rule.status,
-            "drivable_coverage_ratio": drivable_ratio,
-            "usable_coverage_ratio": usable_ratio,
-            "turn_drivable_coverage_ratio": turn_drivable_ratio,
-            "turn_usable_coverage_ratio": turn_usable_ratio,
-            "depth": float(envelope_result["access_depth"]),
-            "turn_buffer_length": float(envelope_result["turn_buffer_length"]),
-        }
+        record = _maneuver_record(context, stall, rule.id, rule.status, envelope_result)
+        failure_reason = _maneuver_failure_reason(record, envelope_result)
+        fallback_result = _perpendicular_l_shape_fallback(context, stall, rule, envelope_result, failure_reason)
+        if fallback_result is not None:
+            fallback_record = _maneuver_record(
+                context,
+                stall,
+                str(fallback_result["rule_id"]),
+                rule.status,
+                fallback_result,
+            )
+            fallback_reason = _maneuver_failure_reason(fallback_record, fallback_result)
+            if fallback_reason is None:
+                record = fallback_record
+                envelope_result = fallback_result
+                failure_reason = None
+
+        _increment_rule_count(rule_counts, str(record["rule_id"]))
         envelopes.append(record)
-        if drivable_ratio + 1e-9 < min_ratio:
-            invalid.append({**record, "reason": "access_envelope_not_in_drivable_aisle"})
-        elif usable_ratio + 1e-9 < min_ratio:
-            invalid.append({**record, "reason": "access_envelope_hits_boundary_or_obstacle"})
-        elif turn_drivable_ratio + 1e-9 < min_turn_ratio:
-            invalid.append({**record, "reason": "turning_sweep_not_in_drivable_aisle"})
-        elif turn_usable_ratio + 1e-9 < min_turn_ratio:
-            invalid.append({**record, "reason": "turning_sweep_hits_boundary_or_obstacle"})
+        if failure_reason is not None:
+            invalid.append({**record, "reason": failure_reason})
 
     return {
         "valid": not invalid,
@@ -189,6 +180,10 @@ def _front_access_envelope(
         "turn_buffer_length": turn_buffer_length,
         "minimum_coverage_ratio": minimum_coverage_ratio,
         "minimum_turn_coverage_ratio": minimum_turn_coverage_ratio,
+        "front_edge": edge,
+        "stall_polygon": stall_polygon,
+        "serving_aisle": aisle,
+        "maneuver_variant": "full_rectangle",
         "reason": "ok",
     }
 
@@ -250,6 +245,11 @@ def _rule_support_report(site: SiteSpec) -> dict[str, str]:
     active_families = {stall.family for stall in _active_stall_specs(site)}
     return {
         "perpendicular_90_proxy": "active" if "perpendicular" in active_families else "available",
+        "perpendicular_90_l_shape_proxy": (
+            "active"
+            if "perpendicular" in active_families and _l_shape_fallback_enabled(site)
+            else "available"
+        ),
         "perpendicular_non_90": "future",
         "angled_proxy": "active" if "angled" in active_families else "available",
         "parallel": "future",
@@ -286,6 +286,108 @@ def _front_edge(stall: ShapelyPolygon, aisle: ShapelyPolygon, target_width: floa
     return candidates[0][3]
 
 
+def _maneuver_record(
+    context: ManeuverContext,
+    stall: ParkingStall,
+    rule_id: str,
+    rule_status: str,
+    envelope_result: dict[str, Any],
+) -> dict[str, Any]:
+    envelope = envelope_result["envelope"]
+    turn_proxy = envelope_result["turn_proxy"]
+    record = {
+        "stall_id": stall.id,
+        "stall_type_id": stall.stall_type_id,
+        "served_by_aisle_id": stall.served_by_aisle_id,
+        "rule_id": rule_id,
+        "rule_status": rule_status,
+        "drivable_coverage_ratio": _coverage_ratio(envelope, context.drivable),
+        "usable_coverage_ratio": _coverage_ratio(envelope, context.usable),
+        "turn_drivable_coverage_ratio": _coverage_ratio(turn_proxy, context.drivable),
+        "turn_usable_coverage_ratio": _coverage_ratio(turn_proxy, context.usable),
+        "depth": float(envelope_result["access_depth"]),
+        "turn_buffer_length": float(envelope_result["turn_buffer_length"]),
+    }
+    for key in ("base_rule_id", "maneuver_variant", "fallback_from_reason"):
+        if key in envelope_result:
+            record[key] = envelope_result[key]
+    return record
+
+
+def _maneuver_failure_reason(record: dict[str, Any], envelope_result: dict[str, Any]) -> str | None:
+    min_ratio = float(envelope_result["minimum_coverage_ratio"])
+    min_turn_ratio = float(envelope_result["minimum_turn_coverage_ratio"])
+    if float(record["drivable_coverage_ratio"]) + 1e-9 < min_ratio:
+        return "access_envelope_not_in_drivable_aisle"
+    if float(record["usable_coverage_ratio"]) + 1e-9 < min_ratio:
+        return "access_envelope_hits_boundary_or_obstacle"
+    if float(record["turn_drivable_coverage_ratio"]) + 1e-9 < min_turn_ratio:
+        return "turning_sweep_not_in_drivable_aisle"
+    if float(record["turn_usable_coverage_ratio"]) + 1e-9 < min_turn_ratio:
+        return "turning_sweep_hits_boundary_or_obstacle"
+    return None
+
+
+def _perpendicular_l_shape_fallback(
+    context: ManeuverContext,
+    stall: ParkingStall,
+    rule: ManeuverRule,
+    envelope_result: dict[str, Any],
+    failure_reason: str | None,
+) -> dict[str, Any] | None:
+    if rule.id != "perpendicular_90_proxy":
+        return None
+    if failure_reason not in {"turning_sweep_not_in_drivable_aisle", "turning_sweep_hits_boundary_or_obstacle"}:
+        return None
+    if not _l_shape_fallback_enabled(context.site):
+        return None
+
+    edge = envelope_result.get("front_edge")
+    stall_polygon = envelope_result.get("stall_polygon")
+    aisle = envelope_result.get("serving_aisle")
+    if not isinstance(edge, LineString) or not isinstance(stall_polygon, ShapelyPolygon) or not isinstance(aisle, ShapelyPolygon):
+        return None
+
+    successful: list[tuple[float, float, dict[str, Any]]] = []
+    for side in ("start", "end"):
+        turn_proxy = _edge_access_l_shape(
+            edge,
+            stall_polygon,
+            aisle,
+            float(envelope_result["access_depth"]),
+            float(envelope_result["turn_buffer_length"]),
+            side,
+        )
+        if turn_proxy is None or turn_proxy.area <= 1e-9:
+            continue
+        candidate = {
+            **envelope_result,
+            "turn_proxy": turn_proxy,
+            "rule_id": "perpendicular_90_l_shape_proxy",
+            "base_rule_id": rule.id,
+            "maneuver_variant": f"l_shape_{side}",
+            "fallback_from_reason": failure_reason,
+        }
+        record = _maneuver_record(context, stall, "perpendicular_90_l_shape_proxy", rule.status, candidate)
+        if _maneuver_failure_reason(record, candidate) is None:
+            successful.append(
+                (
+                    float(record["turn_drivable_coverage_ratio"]),
+                    float(record["turn_usable_coverage_ratio"]),
+                    candidate,
+                )
+            )
+
+    if not successful:
+        return None
+    successful.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    return successful[0][2]
+
+
+def _increment_rule_count(rule_counts: dict[str, int], rule_id: str) -> None:
+    rule_counts[rule_id] = rule_counts.get(rule_id, 0) + 1
+
+
 def _edge_access_rectangle(
     edge: LineString,
     stall: ShapelyPolygon,
@@ -293,6 +395,70 @@ def _edge_access_rectangle(
     depth: float,
     extra_along_edge: float,
 ) -> ShapelyPolygon | None:
+    basis = _edge_access_basis(edge, stall, aisle, depth)
+    if basis is None:
+        return None
+    p1, p2, tangent, normal = basis
+    extra = max(extra_along_edge, 0.0)
+    q1 = (p1[0] - tangent[0] * extra, p1[1] - tangent[1] * extra)
+    q2 = (p2[0] + tangent[0] * extra, p2[1] + tangent[1] * extra)
+    q3 = (q2[0] + normal[0] * depth, q2[1] + normal[1] * depth)
+    q4 = (q1[0] + normal[0] * depth, q1[1] + normal[1] * depth)
+    return ShapelyPolygon([q1, q2, q3, q4])
+
+
+def _edge_access_l_shape(
+    edge: LineString,
+    stall: ShapelyPolygon,
+    aisle: ShapelyPolygon,
+    depth: float,
+    extra_along_edge: float,
+    side: str,
+):
+    base = _edge_access_rectangle(edge, stall, aisle, depth, extra_along_edge=0.0)
+    if base is None or base.area <= 1e-9:
+        return None
+    if extra_along_edge <= 1e-9:
+        return base
+
+    extension = _edge_access_side_extension(edge, stall, aisle, depth, extra_along_edge, side)
+    if extension is None or extension.area <= 1e-9:
+        return None
+    return unary_union([base, extension])
+
+
+def _edge_access_side_extension(
+    edge: LineString,
+    stall: ShapelyPolygon,
+    aisle: ShapelyPolygon,
+    depth: float,
+    extra_along_edge: float,
+    side: str,
+) -> ShapelyPolygon | None:
+    basis = _edge_access_basis(edge, stall, aisle, depth)
+    if basis is None:
+        return None
+    p1, p2, tangent, normal = basis
+    extra = max(extra_along_edge, 0.0)
+    if side == "start":
+        q1 = (p1[0] - tangent[0] * extra, p1[1] - tangent[1] * extra)
+        q2 = p1
+    elif side == "end":
+        q1 = p2
+        q2 = (p2[0] + tangent[0] * extra, p2[1] + tangent[1] * extra)
+    else:
+        return None
+    q3 = (q2[0] + normal[0] * depth, q2[1] + normal[1] * depth)
+    q4 = (q1[0] + normal[0] * depth, q1[1] + normal[1] * depth)
+    return ShapelyPolygon([q1, q2, q3, q4])
+
+
+def _edge_access_basis(
+    edge: LineString,
+    stall: ShapelyPolygon,
+    aisle: ShapelyPolygon,
+    depth: float,
+) -> tuple[tuple[float, float], tuple[float, float], tuple[float, float], tuple[float, float]] | None:
     coords = list(edge.coords)
     if len(coords) < 2 or depth <= 0:
         return None
@@ -318,13 +484,7 @@ def _edge_access_rectangle(
             item[0] * away_from_stall[0] + item[1] * away_from_stall[1],
         ),
     )
-    tangent = (dx / length, dy / length)
-    extra = max(extra_along_edge, 0.0)
-    q1 = (p1[0] - tangent[0] * extra, p1[1] - tangent[1] * extra)
-    q2 = (p2[0] + tangent[0] * extra, p2[1] + tangent[1] * extra)
-    q3 = (q2[0] + normal[0] * depth, q2[1] + normal[1] * depth)
-    q4 = (q1[0] + normal[0] * depth, q1[1] + normal[1] * depth)
-    return ShapelyPolygon([q1, q2, q3, q4])
+    return p1, p2, (dx / length, dy / length), normal
 
 
 def _coverage_ratio(envelope: ShapelyPolygon, area) -> float:
@@ -406,6 +566,13 @@ def _minimum_turn_coverage_ratio(site: SiteSpec) -> float:
     except (TypeError, ValueError):
         value = _minimum_coverage_ratio(site)
     return min(max(value, 0.0), 1.0)
+
+
+def _l_shape_fallback_enabled(site: SiteSpec) -> bool:
+    raw = site.optimization.get("maneuver_l_shape_fallback", True)
+    if isinstance(raw, str):
+        return raw.strip().lower() not in {"false", "0", "no", "off"}
+    return bool(raw)
 
 
 def _minimum_angled_turn_coverage_ratio(site: SiteSpec) -> float:

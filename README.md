@@ -58,7 +58,9 @@ extra aisle reduces the dead-end penalty enough to offset any lost stalls or
 added aisle area. Once a connector is accepted, the endpoint branch turnaround
 pads are removed because those branches are no longer dead ends. The connector
 can also serve conservative 90-degree stalls along its sides when there is room
-after leaving a clear throat at both junctions.
+after leaving a clear throat at both junctions. When L-shaped end-stall support
+is enabled, connector-side stalls may also use one-sided turning clearance near
+the junction instead of requiring the full symmetric turning rectangle.
 
 Branch start positions are auto-sampled by default. You can also control the
 sampling with:
@@ -69,7 +71,11 @@ sampling with:
   "branch_sides": ["left", "right"],
   "max_branches": 2,
   "enable_connectors": true,
-  "connector_throat_length": 6.0
+  "connector_inset_depths": [0, 2.65, 5.3, 7.95],
+  "connector_throat_length": 3.0,
+  "connector_allow_l_shape_end_stalls": true,
+  "maneuver_l_shape_fallback": true,
+  "promote_candidate_layout_preview": true
 }
 ```
 
@@ -118,10 +124,15 @@ filtered before graph validation and scoring.
 Phase 3B adds a conservative turning-sweep proxy. It expands that stall-front
 envelope along the aisle direction on both sides, so side obstacles or aisle-end
 clips can invalidate a stall even when the immediate front rectangle is clear.
+For 90-degree perpendicular stalls, the validator now has an optional
+`perpendicular_90_l_shape_proxy` fallback: if the full symmetric turning proxy
+fails only because one end is clipped, it tries the stall-front rectangle plus
+one side of turning clearance.
 
 Phase 3C-1 routes stalls through explicit maneuver rules. The active rule is
-currently `perpendicular_90_proxy`. Phase 3C-2 also adds an active
-`angled_proxy` validator rule for angled stall geometry. Phase 3D-1 can
+currently `perpendicular_90_proxy`, with the L-shaped fallback reported as
+`perpendicular_90_l_shape_proxy` when it is used. Phase 3C-2 also adds an
+active `angled_proxy` validator rule for angled stall geometry. Phase 3D-1 can
 generate angled stalls along the main aisle, and Phase 3D-2 extends angled
 generation to branch aisles. Connector-side angled stalls, parallel stalls,
 T-end stalls, and non-90 perpendicular stalls remain future work and are
@@ -150,6 +161,55 @@ Phase 4B-1 adds a report-only shadow selector over branch and connector
 candidates. It uses the conflict matrix to choose a compatible candidate set and
 stores the result in `candidate_snapshot.selection`; it does not yet replace the
 current generated layout.
+Phase 4B-2A turns that shadow selection into a top-level
+`candidate_network_preview` report. The preview contains the current main
+aisle/turnaround plus any shadow-selected branch or connector candidates, but it
+is still preview-only and does not replace the DXF/SVG layout.
+Phase 4B-2B draws that preview network into the SVG as a translucent dashed
+debug overlay under `candidate-network-preview`, so the shadow road network can
+be inspected visually without changing the official generated layout.
+Phase 4B-3 validates the preview network as a temporary layout object. The
+report now includes `candidate_network_preview.validation` with internal
+conflict, geometry containment, and traffic graph checks.
+Phase 4C-1 adds `candidate_layout_preview`, a complete preview-only layout with
+candidate aisles, preview stalls, and validation for containment, stall
+association, maneuver access, and traffic graph reachability.
+Phase 4C-2A scores that preview layout with the same configured weights as the
+official layout and reports a comparison, including stall delta, score delta,
+and whether the preview is eligible for later promotion.
+Phase 4C-2B adds controlled promotion behind
+`optimization.promote_candidate_layout_preview`. When enabled, a preview layout
+can replace the official DXF/SVG/report output only if it is promotion-eligible;
+otherwise the original generated layout is kept and the rejection reason is
+reported in `candidate_layout_promotion`.
+The bundled `examples/phase0_site.json` now enables this flag so the U-shaped
+candidate loop is promoted into the official DXF/SVG/report output when its
+validated preview score is not lower than the greedy layout.
+Phase 4C-3A expands unconnected shadow branch candidates into separate branch
+aisle and end-turnaround preview aisles, so a branch can be promoted only after
+the traffic graph can see its turnaround.
+Phase 4C-3B makes the shadow selector dependency-aware: branch selection
+respects `optimization.max_branches`, and connector candidates are selected only
+when both endpoint branch source ids are already selected.
+Phase 4C-3C lets loop bundles compete with single branches. A bundle contains
+two branch candidates plus their connector candidate, receives a small loop
+bonus, and emits the same selected ids after it wins.
+Phase 4C-4A improves connector candidate availability. The candidate snapshot
+can synthesize report-only connector skeletons between compatible branch
+candidate sources when no generated connector candidate exists, and diagnostics
+now report connector candidate counts.
+Phase 4C-4B makes the connector preview explanation explicit: the network
+preview reports loop connector counts, connected branch source ids, and branch
+turnaround ids suppressed because a connector forms the return path.
+Phase 4C-4C moves U-shaped connector candidates inward by one stall depth when
+possible, controlled by `optimization.connector_allow_outer_stall_row`, so the
+outer side of the connector can generate parking instead of hugging the site
+edge.
+Phase 4C-4D turns that fixed inset into a small candidate search. You can set
+`optimization.connector_inset_depths` to explicit setback distances, or let the
+solver try flush, half-stall, one-stall, and one-and-a-half-stall connector
+positions automatically. Reports and previews now include
+`connector_inset_depth` so the selected U-connector position is auditable.
 
 You can tune these maneuver checks with:
 

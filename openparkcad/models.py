@@ -155,6 +155,9 @@ class LayoutResult:
     maneuver_validation: dict[str, Any] = field(default_factory=dict)
     candidate_objects: list[CandidateObject] = field(default_factory=list)
     candidate_selection: dict[str, Any] = field(default_factory=dict)
+    candidate_network_preview: dict[str, Any] = field(default_factory=dict)
+    candidate_layout_preview: dict[str, Any] = field(default_factory=dict)
+    candidate_layout_promotion: dict[str, Any] = field(default_factory=dict)
     unsupported_phase1_inputs: list[dict[str, str]] = field(default_factory=list)
 
     @property

@@ -4,6 +4,8 @@ import argparse
 import json
 from pathlib import Path
 
+from openparkcad.candidate_layout_preview import candidate_layout_preview_report
+from openparkcad.candidate_network_preview import candidate_network_preview_report
 from openparkcad.candidate_snapshot import candidate_snapshot_report
 from openparkcad.diagnostics import build_input_diagnostics
 from openparkcad.exporter_dxf import write_dxf
@@ -73,6 +75,9 @@ def _write_report(layout, path: str) -> None:
         "stall_assignment_attempts": layout.stall_assignment_attempts,
         "score": layout.score,
         "candidate_snapshot": candidate_snapshot_report(layout),
+        "candidate_network_preview": candidate_network_preview_report(layout),
+        "candidate_layout_preview": candidate_layout_preview_report(layout),
+        "candidate_layout_promotion": layout.candidate_layout_promotion,
         "maneuver_validation": layout.maneuver_validation,
         "unsupported_phase1_inputs": layout.unsupported_phase1_inputs,
         "aisles": [

@@ -130,6 +130,7 @@ def test_phase3b_turning_proxy_rejects_blocked_side_sweep():
         optimization={
             "maneuver_turn_buffer_length": 2.0,
             "maneuver_turn_coverage_ratio": 0.98,
+            "maneuver_l_shape_fallback": False,
         },
     )
     layout = LayoutResult(
@@ -158,6 +159,50 @@ def test_phase3b_turning_proxy_rejects_blocked_side_sweep():
     assert validation["valid"] is False
     assert validation["turn_buffer_length"] == 2.0
     assert validation["invalid_stalls"][0]["reason"] == "turning_sweep_hits_boundary_or_obstacle"
+
+
+def test_phase3b_l_shape_fallback_accepts_one_sided_corner_sweep():
+    site = SiteSpec(
+        name="l-shape-corner-turn",
+        boundary=[(0, 0), (20, 0), (20, 20), (0, 20)],
+        stall=StallSpec(width=2.5, length=5.0, allowed_angles=(90.0,)),
+        aisle_width=6.0,
+        margin=0.0,
+        optimization={
+            "maneuver_turn_buffer_length": 2.0,
+            "maneuver_turn_coverage_ratio": 0.98,
+        },
+    )
+    layout = LayoutResult(
+        site=site,
+        stalls=[
+            ParkingStall(
+                id="P-001",
+                polygon=[(5, 6), (7.5, 6), (7.5, 11), (5, 11)],
+                angle_degrees=90.0,
+                served_by_aisle_id="A-MAIN",
+                aisle_side="left",
+            )
+        ],
+        aisles=[
+            ParkingAisle(
+                id="A-MAIN",
+                polygon=[(0, 0), (7.5, 0), (7.5, 6), (0, 6)],
+                angle_degrees=90.0,
+                role="main",
+            )
+        ],
+    )
+
+    validation = validate_maneuvers(layout)
+
+    assert validation["valid"] is True
+    assert validation["rule_counts"] == {"perpendicular_90_l_shape_proxy": 1}
+    assert validation["rule_support"]["perpendicular_90_l_shape_proxy"] == "active"
+    assert validation["envelopes"][0]["rule_id"] == "perpendicular_90_l_shape_proxy"
+    assert validation["envelopes"][0]["base_rule_id"] == "perpendicular_90_proxy"
+    assert validation["envelopes"][0]["maneuver_variant"] == "l_shape_start"
+    assert validation["envelopes"][0]["fallback_from_reason"] == "turning_sweep_not_in_drivable_aisle"
 
 
 def test_phase3b_turning_proxy_can_filter_generated_stalls_near_aisle_ends():
@@ -190,6 +235,7 @@ def test_phase3b_turning_proxy_can_filter_generated_stalls_near_aisle_ends():
             "entrance_offsets": [0],
             "maneuver_turn_buffer_length": 8.0,
             "maneuver_turn_coverage_ratio": 0.98,
+            "maneuver_l_shape_fallback": False,
         },
     )
 

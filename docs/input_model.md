@@ -773,7 +773,9 @@ Optimization settings should not be mixed with hard constraints.
       "dead_end": -30.0,
       "reverse_distance": -5.0,
       "conflict_point": -10.0
-    }
+    },
+    "connector_allow_l_shape_end_stalls": true,
+    "maneuver_l_shape_fallback": true
   }
 }
 ```
@@ -903,7 +905,8 @@ use. Reports must be honest about which rules are active.
     }
   },
   "optimization": {
-    "objective": "conservative"
+    "objective": "conservative",
+    "promote_candidate_layout_preview": false
   },
   "diagnostics": {
     "explain_rejections": true,
@@ -960,17 +963,22 @@ optimization branch_start_step          active for branch start auto-sampling
 optimization branch_sides               active for branch side filtering
 optimization max_branches               active for limited multi-branch search
 optimization enable_connectors          active for same-side branch connectors
+optimization connector_allow_outer_stall_row active for inset U-connector placement
+optimization connector_inset_depths     active for connector setback candidate search
 optimization connector_throat_length    active for connector-side stall clearance
+optimization connector_allow_l_shape_end_stalls active for connector end-stall candidates
 optimization maneuver_access_depth      active for Phase 3A access envelope
 optimization maneuver_access_coverage_ratio active for Phase 3A access envelope
 optimization maneuver_turn_buffer_length active for Phase 3B turn proxy
 optimization maneuver_turn_coverage_ratio active for Phase 3B turn proxy
+optimization maneuver_l_shape_fallback  active for 90-degree one-sided turn proxy
 optimization maneuver_angled_access_depth active for angled validator proxy
 optimization maneuver_angled_turn_buffer_length active for angled validator proxy
 optimization maneuver_angled_access_coverage_ratio active for angled validator proxy
 optimization maneuver_angled_turn_coverage_ratio active for angled validator proxy
 optimization weights                    active for Phase 1 scoring
 optimization score breakdown            active in JSON report
+optimization promote_candidate_layout_preview active as guarded opt-in
 report aisles / stalls traceability      active in JSON report
 report selected_branches                active in JSON report
 report selected_connectors              active, includes removed and added stalls
@@ -983,8 +991,18 @@ report selected_stall_assignment        active in JSON report
 report stall_assignment_attempts        active in JSON report
 report candidate_snapshot               active in JSON report
 report candidate_snapshot conflict_matrix active in JSON report
-report candidate_snapshot selection     active as shadow selector report
+report candidate_snapshot selection     active as bundle-aware shadow selector report
+report candidate connector counts       active in diagnostics
+report candidate_network_preview        active as preview-only report
+report candidate_network_preview validation active as preview-only report
+report connector turnaround suppression active as preview-only report
+report candidate shadow branch turnarounds active as preview-only network expansion
+report candidate_layout_preview         active as preview-only report
+report candidate_layout_preview validation active as preview-only report
+report candidate_layout_preview scoring active as preview-only comparison
+report candidate_layout_promotion       active in JSON report
 report attempt graph rejection           active in JSON report
+svg candidate_network_preview overlay   active as debug layer
 diagnostics                             active as reporting structure
 ```
 

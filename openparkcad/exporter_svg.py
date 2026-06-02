@@ -25,6 +25,10 @@ def write_svg(layout: LayoutResult, path: str | Path) -> None:
         all_points.extend(aisle.polygon)
     for stall in layout.stalls:
         all_points.extend(stall.polygon)
+    for aisle in _candidate_preview_aisles(layout):
+        all_points.extend(aisle["geometry"])
+    for stall in _candidate_layout_preview_stalls(layout):
+        all_points.extend(stall["geometry"])
 
     min_x, min_y, max_x, max_y = bounds(all_points)
     padding = 3.0
@@ -61,18 +65,62 @@ def write_svg(layout: LayoutResult, path: str | Path) -> None:
             parts.append(f'<text x="{cx:.3f}" y="{cy - 0.6:.3f}" font-size="1.0" text-anchor="middle" fill="{style["stroke"]}">{shape.id}</text>')
     for aisle in layout.aisles:
         parts.append(_polygon_svg([tx(point) for point in aisle.polygon], "#e5e7eb", "#6b7280", 0.04))
+    preview_aisles = _candidate_preview_aisles(layout)
+    if preview_aisles:
+        parts.append('<g id="candidate-network-preview" data-status="preview-only">')
+        for aisle in preview_aisles:
+            style = _candidate_preview_style(str(aisle["role"]))
+            poly = [tx(point) for point in aisle["geometry"]]
+            parts.append(
+                _polygon_svg(
+                    poly,
+                    str(style["fill"]),
+                    str(style["stroke"]),
+                    float(style["stroke_width"]),
+                    opacity=float(style["opacity"]),
+                    dasharray=str(style["dasharray"]),
+                )
+            )
+            cx, cy = _centroid(poly)
+            parts.append(
+                f'<text x="{cx:.3f}" y="{cy:.3f}" font-size="0.85" text-anchor="middle" '
+                f'fill="{style["stroke"]}">{aisle["id"]}</text>'
+            )
+        parts.append("</g>")
+    preview_stalls = _candidate_layout_preview_stalls(layout)
+    if preview_stalls:
+        parts.append('<g id="candidate-layout-preview-stalls" data-status="preview-only">')
+        for stall in preview_stalls:
+            poly = [tx(point) for point in stall["geometry"]]
+            parts.append(
+                _polygon_svg(
+                    poly,
+                    "#ffedd5",
+                    "#ea580c",
+                    0.08,
+                    opacity=0.72,
+                    dasharray="0.45 0.25",
+                )
+            )
+            cx, cy = _centroid(poly)
+            parts.append(
+                f'<text x="{cx:.3f}" y="{cy:.3f}" font-size="0.75" text-anchor="middle" '
+                f'fill="#9a3412">{stall["id"]}</text>'
+            )
+        parts.append("</g>")
     for stall in layout.stalls:
         parts.append(_polygon_svg([tx(point) for point in stall.polygon], "#dbeafe", "#1d4ed8", 0.06))
         cx, cy = _centroid([tx(point) for point in stall.polygon])
-        parts.append(f'<text x="{cx:.3f}" y="{cy:.3f}" font-size="0.9" text-anchor="middle" fill="#1e3a8a">{stall.id}</text>')
+        parts.append(f'<text x="{cx:.3f}" y="{cy:.3f}" font-size="0.82" text-anchor="middle" fill="#1e3a8a">{_display_stall_label(stall.id)}</text>')
     parts.append("</svg>")
 
     target.write_text("\n".join(parts), encoding="utf-8")
 
 
-def _polygon_svg(poly: Polygon, fill: str, stroke: str, stroke_width: float, opacity: float = 1.0) -> str:
+def _polygon_svg(poly: Polygon, fill: str, stroke: str, stroke_width: float, opacity: float = 1.0, dasharray: str | None = None) -> str:
     points = " ".join(f"{x:.3f},{y:.3f}" for x, y in poly)
-    return f'<polygon points="{points}" fill="{fill}" stroke="{stroke}" stroke-width="{stroke_width}" opacity="{opacity:.2f}"/>'
+    dash = f' stroke-dasharray="{dasharray}"' if dasharray else ""
+    return f'<polygon points="{points}" fill="{fill}" stroke="{stroke}" stroke-width="{stroke_width}" opacity="{opacity:.2f}"{dash}/>'
 
 
 def _polyline_svg(points: list[Point], stroke: str, stroke_width: float) -> str:
@@ -99,3 +147,79 @@ def _diagnostic_style(layer: str) -> dict[str, float | str]:
     if layer == "PEDESTRIAN":
         return {"fill": "#dcfce7", "stroke": "#15803d", "stroke_width": 0.10, "opacity": 0.65}
     return {"fill": "#fef3c7", "stroke": "#92400e", "stroke_width": 0.08, "opacity": 0.70}
+
+
+def _candidate_preview_aisles(layout: LayoutResult) -> list[dict[str, object]]:
+    if _layout_promoted(layout):
+        return []
+    preview = layout.candidate_network_preview
+    if not preview:
+        return []
+    aisles = preview.get("aisles", [])
+    if not isinstance(aisles, list):
+        return []
+    return [aisle for aisle in aisles if _valid_preview_aisle(aisle)]
+
+
+def _candidate_layout_preview_stalls(layout: LayoutResult) -> list[dict[str, object]]:
+    if _layout_promoted(layout):
+        return []
+    preview = layout.candidate_layout_preview
+    if not preview:
+        return []
+    stalls = preview.get("stalls", [])
+    if not isinstance(stalls, list):
+        return []
+    current_stall_geometries = {_polygon_key(stall.polygon) for stall in layout.stalls}
+    return [
+        stall
+        for stall in stalls
+        if _valid_preview_stall(stall) and stall.get("source") == "shadow_candidate"
+        and _polygon_key(stall["geometry"]) not in current_stall_geometries
+    ]
+
+
+def _valid_preview_aisle(raw: object) -> bool:
+    if not isinstance(raw, dict):
+        return False
+    geometry = raw.get("geometry")
+    return isinstance(raw.get("id"), str) and isinstance(raw.get("role"), str) and _valid_polygon(geometry)
+
+
+def _valid_preview_stall(raw: object) -> bool:
+    if not isinstance(raw, dict):
+        return False
+    geometry = raw.get("geometry")
+    return isinstance(raw.get("id"), str) and _valid_polygon(geometry)
+
+
+def _valid_polygon(raw: object) -> bool:
+    if not isinstance(raw, list) or len(raw) < 3:
+        return False
+    return all(isinstance(item, list | tuple) and len(item) == 2 for item in raw)
+
+
+def _layout_promoted(layout: LayoutResult) -> bool:
+    return layout.generation_mode == "candidate_layout_promoted" or layout.candidate_layout_promotion.get("status") == "promoted"
+
+
+def _display_stall_label(stall_id: str) -> str:
+    if stall_id.startswith("PL-STALL-"):
+        return f"P-{stall_id.removeprefix('PL-STALL-')}"
+    return stall_id
+
+
+def _polygon_key(raw: object) -> tuple[tuple[float, float], ...]:
+    if not _valid_polygon(raw):
+        return ()
+    return tuple(sorted((round(float(x), 6), round(float(y), 6)) for x, y in raw))
+
+
+def _candidate_preview_style(role: str) -> dict[str, float | str]:
+    if role == "main":
+        return {"fill": "#ccfbf1", "stroke": "#0f766e", "stroke_width": 0.10, "opacity": 0.28, "dasharray": "0.9 0.45"}
+    if role == "turnaround":
+        return {"fill": "#d9f99d", "stroke": "#4d7c0f", "stroke_width": 0.10, "opacity": 0.26, "dasharray": "0.9 0.45"}
+    if role == "connector":
+        return {"fill": "#fde68a", "stroke": "#b45309", "stroke_width": 0.12, "opacity": 0.34, "dasharray": "0.7 0.35"}
+    return {"fill": "#f0abfc", "stroke": "#a21caf", "stroke_width": 0.12, "opacity": 0.32, "dasharray": "0.7 0.35"}

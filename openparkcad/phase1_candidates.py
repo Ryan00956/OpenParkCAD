@@ -53,6 +53,7 @@ class ConnectorGeometry:
     u_max: float
     center_v: float
     side: str
+    inset_depth: float
 
 
 def iter_phase1_candidates(
@@ -327,6 +328,9 @@ def _branch_layout(
     branch_turnaround = branch_turnaround_polygon(site, entrance, heading_degrees, branch_u, side, branch_length)
     branch_drivable = unary_union([branch_aisle, branch_turnaround])
     diagnostic["geometry"] = polygon_points(branch_drivable)
+    diagnostic["branch_aisle_geometry"] = polygon_points(branch_aisle)
+    diagnostic["branch_turnaround_geometry"] = polygon_points(branch_turnaround)
+    diagnostic["branch_turnaround_id"] = f"{branch_id}-TURNAROUND"
     if not available.covers(branch_drivable):
         diagnostic["reason"] = "branch_geometry_outside_usable_area"
         return None, diagnostic
@@ -357,6 +361,7 @@ def _branch_layout(
         occupied=occupied,
         start_index=len(kept_main_stalls) + 1,
     )
+    diagnostic["generated_stalls"] = _stall_diagnostics(branch_stalls)
     stalls = _renumber_stalls(kept_main_stalls + branch_stalls)
     aisles = list(base.aisles) + [
         ParkingAisle(
@@ -563,10 +568,31 @@ def _with_best_connectors(
         return base
     best = base
     for branch_a, branch_b in _connector_pairs(best):
-        candidate, diagnostic = _connector_layout(site, available, entrance, heading_degrees, best, branch_a, branch_b, finalize_layout, graph_valid, score_total)
-        diagnostics.append(diagnostic)
-        if candidate and graph_valid(candidate) and score_total(candidate) > score_total(best):
-            best = candidate
+        pair_base = best
+        pair_best = best
+        for inset_depth in _connector_inset_depths(site, branch_a, branch_b):
+            candidate, diagnostic = _connector_layout(
+                site,
+                available,
+                entrance,
+                heading_degrees,
+                pair_base,
+                branch_a,
+                branch_b,
+                inset_depth,
+                finalize_layout,
+                graph_valid,
+                score_total,
+            )
+            diagnostics.append(diagnostic)
+            if (
+                candidate
+                and graph_valid(candidate)
+                and candidate.stall_count > pair_base.stall_count
+                and score_total(candidate) > score_total(pair_best)
+            ):
+                pair_best = candidate
+        best = pair_best
     return best
 
 
@@ -578,6 +604,7 @@ def _connector_layout(
     base: LayoutResult,
     branch_a: dict[str, object],
     branch_b: dict[str, object],
+    inset_depth: float,
     finalize_layout: FinalizeLayout,
     graph_valid: GraphValid,
     score_total: LayoutScoreTotal,
@@ -585,10 +612,11 @@ def _connector_layout(
     connector_id = f"A-CONNECTOR-{len(base.selected_connectors) + 1:03d}"
     branch_a_id = str(branch_a["id"])
     branch_b_id = str(branch_b["id"])
-    connector_geometry = _connector_geometry(site, entrance, heading_degrees, branch_a, branch_b)
+    connector_geometry = _connector_geometry(site, entrance, heading_degrees, branch_a, branch_b, inset_depth)
     diagnostic: dict[str, object] = {
         "connector_id": connector_id,
         "connects": [branch_a_id, branch_b_id],
+        "connector_inset_depth": float(inset_depth),
         "reason": "connector_evaluated",
     }
     if connector_geometry is None:
@@ -596,6 +624,7 @@ def _connector_layout(
         return None, diagnostic
     connector = connector_geometry.polygon
     diagnostic["geometry"] = polygon_points(connector)
+    diagnostic["connector_inset_depth"] = connector_geometry.inset_depth
     if not available.covers(connector):
         diagnostic["reason"] = "connector_geometry_outside_usable_area"
         return None, diagnostic
@@ -606,18 +635,14 @@ def _connector_layout(
         return None, diagnostic
 
     connector_drivable = connector
-    kept_stalls = [
-        stall for stall in base.stalls if not area_overlaps(ShapelyPolygon(stall.polygon), connector_drivable)
-    ]
-    removed_stalls = base.stall_count - len(kept_stalls)
     removed_turnarounds = _connected_turnaround_ids({branch_a_id, branch_b_id})
     kept_aisles = [
         aisle for aisle in base.aisles if aisle.id not in removed_turnarounds
     ]
-    occupied = unary_union(
+    kept_aisles = _trim_endpoint_branch_aisles(kept_aisles, connector_drivable, {branch_a_id, branch_b_id})
+    occupied_aisles = unary_union(
         [ShapelyPolygon(aisle.polygon) for aisle in kept_aisles]
         + [connector_drivable]
-        + [ShapelyPolygon(stall.polygon) for stall in kept_stalls]
     )
     connector_stalls = _stalls_along_connector(
         site,
@@ -626,9 +651,22 @@ def _connector_layout(
         heading_degrees,
         connector_geometry,
         connector_id,
-        occupied,
-        start_index=len(kept_stalls) + 1,
+        occupied_aisles,
+        start_index=base.stall_count + 1,
     )
+    connector_stall_area = (
+        unary_union([ShapelyPolygon(stall.polygon) for stall in connector_stalls])
+        if connector_stalls
+        else ShapelyPolygon()
+    )
+    kept_stalls = [
+        stall
+        for stall in base.stalls
+        if not area_overlaps(ShapelyPolygon(stall.polygon), connector_drivable)
+        and not area_overlaps(ShapelyPolygon(stall.polygon), connector_stall_area)
+    ]
+    removed_stalls = base.stall_count - len(kept_stalls)
+    diagnostic["generated_stalls"] = _stall_diagnostics(connector_stalls)
     connector_aisle = ParkingAisle(
         id=connector_id,
         polygon=polygon_points(connector_drivable),
@@ -645,6 +683,7 @@ def _connector_layout(
             "removed_stalls": removed_stalls,
             "added_stalls": len(connector_stalls),
             "removed_turnarounds": sorted(removed_turnarounds),
+            "connector_inset_depth": connector_geometry.inset_depth,
         },
     ]
     result = finalize_layout(
@@ -697,7 +736,7 @@ def _stalls_along_connector(
     if not module_angle_allowed(90.0, stall_spec.allowed_angles):
         return stalls
 
-    throat = _connector_throat_length(site)
+    throat = 0.0 if _connector_l_shape_end_stalls_enabled(site) else _connector_throat_length(site)
     u = connector.u_min + throat
     end_u = connector.u_max - throat
     if end_u - u < stall_spec.width:
@@ -741,7 +780,7 @@ def _connector_pairs(layout: LayoutResult) -> list[tuple[dict[str, object], dict
     return pairs
 
 
-def _connector_geometry(site: SiteSpec, entrance: EntranceSpec, heading_degrees: float, branch_a: dict[str, object], branch_b: dict[str, object]) -> ConnectorGeometry | None:
+def _connector_geometry(site: SiteSpec, entrance: EntranceSpec, heading_degrees: float, branch_a: dict[str, object], branch_b: dict[str, object], inset_depth: float) -> ConnectorGeometry | None:
     u1 = float(branch_a["start_u"])
     u2 = float(branch_b["start_u"])
     if abs(u2 - u1) <= site.aisle_width:
@@ -751,20 +790,66 @@ def _connector_geometry(site: SiteSpec, entrance: EntranceSpec, heading_degrees:
         return None
     direction = 1 if side == "left" else -1
     length = min(float(branch_a["length"]), float(branch_b["length"]))
-    center_v = direction * (length - site.aisle_width / 2)
+    capped_inset = min(max(float(inset_depth), 0.0), _max_connector_inset_depth(site, length))
+    center_v = direction * (length - site.aisle_width / 2 - capped_inset)
+    u_min = min(u1, u2) - site.aisle_width / 2
+    u_max = max(u1, u2) + site.aisle_width / 2
     local = (
-        min(u1, u2),
+        u_min,
         center_v - site.aisle_width / 2,
-        max(u1, u2),
+        u_max,
         center_v + site.aisle_width / 2,
     )
     return ConnectorGeometry(
         polygon=normalized_local_box_to_world(local, entrance, heading_degrees),
-        u_min=min(u1, u2),
-        u_max=max(u1, u2),
+        u_min=u_min,
+        u_max=u_max,
         center_v=center_v,
         side=side,
+        inset_depth=capped_inset,
     )
+
+
+def _connector_inset_depths(site: SiteSpec, branch_a: dict[str, object], branch_b: dict[str, object]) -> tuple[float, ...]:
+    branch_length = min(float(branch_a["length"]), float(branch_b["length"]))
+    max_depth = _max_connector_inset_depth(site, branch_length)
+    raw = site.optimization.get("connector_inset_depths")
+    if isinstance(raw, list):
+        depths = []
+        for item in raw:
+            try:
+                depths.append(float(item))
+            except (TypeError, ValueError):
+                continue
+        return _normalized_inset_depths(depths, max_depth)
+    if not site.optimization.get("connector_allow_outer_stall_row", True):
+        return (0.0,)
+    stall_spec = _connector_stall(site)
+    if stall_spec.family != "perpendicular" or not module_angle_allowed(90.0, stall_spec.allowed_angles):
+        return (0.0,)
+    return _normalized_inset_depths(
+        [0.0, stall_spec.length / 2, stall_spec.length, stall_spec.length * 1.5],
+        max_depth,
+    )
+
+
+def _normalized_inset_depths(depths: list[float], max_depth: float) -> tuple[float, ...]:
+    values = {round(min(max(depth, 0.0), max_depth), 6) for depth in depths}
+    values.add(0.0)
+    return tuple(sorted(values))
+
+
+def _max_connector_inset_depth(site: SiteSpec, branch_length: float) -> float:
+    return max(branch_length - site.aisle_width * 2, 0.0)
+
+
+def _connector_outer_stall_depth(site: SiteSpec, branch_length: float) -> float:
+    if not site.optimization.get("connector_allow_outer_stall_row", True):
+        return 0.0
+    stall_spec = _connector_stall(site)
+    if stall_spec.family != "perpendicular" or not module_angle_allowed(90.0, stall_spec.allowed_angles):
+        return 0.0
+    return min(stall_spec.length, _max_connector_inset_depth(site, branch_length))
 
 
 def _connector_conflict(layout: LayoutResult, connector, endpoint_branch_ids: set[str]) -> str | None:
@@ -778,6 +863,110 @@ def _connector_conflict(layout: LayoutResult, connector, endpoint_branch_ids: se
     return None
 
 
+def _trim_endpoint_branch_aisles(
+    aisles: list[ParkingAisle],
+    connector,
+    endpoint_branch_ids: set[str],
+) -> list[ParkingAisle]:
+    main = next((ShapelyPolygon(aisle.polygon) for aisle in aisles if aisle.role == "main"), None)
+    if main is None:
+        return aisles
+    trimmed: list[ParkingAisle] = []
+    for aisle in aisles:
+        if aisle.id not in endpoint_branch_ids:
+            trimmed.append(aisle)
+            continue
+        geometry = _trim_branch_aisle_to_connector(ShapelyPolygon(aisle.polygon), main, connector)
+        if geometry is None:
+            trimmed.append(aisle)
+            continue
+        trimmed.append(
+            ParkingAisle(
+                id=aisle.id,
+                polygon=polygon_points(geometry),
+                angle_degrees=aisle.angle_degrees,
+                role=aisle.role,
+                connected_to_entrance_id=aisle.connected_to_entrance_id,
+                parent_aisle_id=aisle.parent_aisle_id,
+                connected_aisle_ids=aisle.connected_aisle_ids,
+            )
+        )
+    return trimmed
+
+
+def _trim_branch_aisle_to_connector(branch, main, connector):
+    axis = _branch_axis(branch, main)
+    if axis is None:
+        return None
+    cut = _branch_connector_half_plane(branch, main, connector, axis)
+    if cut is None:
+        return None
+    kept = branch.intersection(cut)
+    components = [item for item in getattr(kept, "geoms", [kept]) if getattr(item, "area", 0.0) > 1e-6]
+    if not components:
+        return None
+    return max(components, key=lambda item: item.area)
+
+
+def _branch_connector_half_plane(branch, main, connector, axis: tuple[float, float]):
+    connector_projections = [_project(point, axis) for point in connector.exterior.coords]
+    if not connector_projections:
+        return None
+    main_projection = _project((main.centroid.x, main.centroid.y), axis)
+    connector_projection = _project((connector.centroid.x, connector.centroid.y), axis)
+    keep_greater = main_projection >= connector_projection
+    threshold = max(connector_projections) if keep_greater else min(connector_projections)
+    min_x, min_y, max_x, max_y = unary_union([branch, main, connector]).bounds
+    span = max(max_x - min_x, max_y - min_y, 1.0) * 4
+    return _half_plane(axis, threshold, keep_greater, span)
+
+
+def _half_plane(axis: tuple[float, float], threshold: float, keep_greater: bool, span: float) -> ShapelyPolygon:
+    ax, ay = axis
+    px, py = -ay, ax
+    origin = (ax * threshold, ay * threshold)
+    direction = 1 if keep_greater else -1
+    return ShapelyPolygon(
+        [
+            (origin[0] + px * span, origin[1] + py * span),
+            (origin[0] + ax * span * direction + px * span, origin[1] + ay * span * direction + py * span),
+            (origin[0] + ax * span * direction - px * span, origin[1] + ay * span * direction - py * span),
+            (origin[0] - px * span, origin[1] - py * span),
+        ]
+    )
+
+
+def _branch_axis(branch, main) -> tuple[float, float] | None:
+    rectangle = branch.minimum_rotated_rectangle
+    coords = list(rectangle.exterior.coords)
+    edges: list[tuple[float, float, float]] = []
+    for start, end in zip(coords, coords[1:]):
+        dx = end[0] - start[0]
+        dy = end[1] - start[1]
+        edges.append((dx * dx + dy * dy, dx, dy))
+    if not edges:
+        return None
+    _, dx, dy = max(edges, key=lambda item: item[0])
+    axis = _unit_vector(dx, dy)
+    if axis is None:
+        return None
+    to_main = (main.centroid.x - branch.centroid.x, main.centroid.y - branch.centroid.y)
+    if axis[0] * to_main[0] + axis[1] * to_main[1] < 0:
+        return (-axis[0], -axis[1])
+    return axis
+
+
+def _unit_vector(dx: float, dy: float) -> tuple[float, float] | None:
+    length = (dx * dx + dy * dy) ** 0.5
+    if length <= 1e-9:
+        return None
+    return (dx / length, dy / length)
+
+
+def _project(point, axis: tuple[float, float]) -> float:
+    return float(point[0]) * axis[0] + float(point[1]) * axis[1]
+
+
 def _connected_turnaround_ids(branch_ids: set[str]) -> set[str]:
     return {f"{branch_id}-TURNAROUND" for branch_id in branch_ids}
 
@@ -789,6 +978,16 @@ def _connector_throat_length(site: SiteSpec) -> float:
     except (TypeError, ValueError):
         value = site.aisle_width
     return max(value, 0.0)
+
+
+def _connector_l_shape_end_stalls_enabled(site: SiteSpec) -> bool:
+    raw = site.optimization.get(
+        "connector_allow_l_shape_end_stalls",
+        site.optimization.get("maneuver_l_shape_fallback", True),
+    )
+    if isinstance(raw, str):
+        return raw.strip().lower() not in {"false", "0", "no", "off"}
+    return bool(raw)
 
 
 def _max_clear_aisle_length(site: SiteSpec, available, entrance: EntranceSpec, heading_degrees: float, start: float) -> float:
@@ -946,6 +1145,20 @@ def _renumber_stalls(stalls: list[ParkingStall]) -> list[ParkingStall]:
             stall_type_id=stall.stall_type_id,
         )
         for index, stall in enumerate(stalls, start=1)
+    ]
+
+
+def _stall_diagnostics(stalls: list[ParkingStall]) -> list[dict[str, object]]:
+    return [
+        {
+            "source_id": stall.id,
+            "geometry": stall.polygon,
+            "angle_degrees": stall.angle_degrees,
+            "served_by_aisle_id": stall.served_by_aisle_id,
+            "aisle_side": stall.aisle_side,
+            "stall_type_id": stall.stall_type_id,
+        }
+        for stall in stalls
     ]
 
 

@@ -1,6 +1,6 @@
 {
   "version": "0.1",
-  "name": "phase0 realistic input sample",
+  "name": "phase0 large branch test sample",
   "units": "m",
   "standards": {
     "jurisdiction": "CN",
@@ -11,7 +11,7 @@
   "site": {
     "boundary": {
       "type": "polygon",
-      "points": [[0, 0], [64, 0], [64, 34], [50, 45], [10, 39], [0, 28]]
+      "points": [[0, 0], [86, 0], [86, 66], [0, 66]]
     },
     "obstacles": [
       {
@@ -19,7 +19,7 @@
         "type": "building",
         "geometry": {
           "type": "polygon",
-          "points": [[24, 13], [34, 13], [34, 21], [24, 21]]
+          "points": [[72, 8], [80, 8], [80, 16], [72, 16]]
         },
         "clearance": 0.3
       }
@@ -32,7 +32,7 @@
       "type": "column",
       "geometry": {
         "type": "circle",
-        "center": [44, 16],
+        "center": [72, 24],
         "radius": 0.35
       },
       "clearance": 0.3,
@@ -43,7 +43,7 @@
       "type": "charging_post",
       "geometry": {
         "type": "rectangle",
-        "origin": [14, 32],
+        "origin": [14, 58],
         "width": 0.5,
         "height": 0.4,
         "rotation_degrees": 0
@@ -56,8 +56,8 @@
     {
       "id": "main-gate",
       "mode": "shared",
-      "center": [8, 0],
-      "width": 7.0,
+      "center": [43, 0],
+      "width": 8.0,
       "heading_degrees": 90,
       "allowed_movements": ["enter", "exit"]
     }
@@ -68,7 +68,7 @@
         "id": "walkway-demo",
         "geometry": {
           "type": "polyline_buffer",
-          "points": [[0, 30], [18, 36]],
+          "points": [[0, 60], [18, 64]],
           "width": 1.8
         },
         "priority": "future"
@@ -165,17 +165,27 @@
     }
   },
   "optimization": {
-    "objective": "conservative",
-    "heading_deltas_degrees": [-20, -10, 0, 10, 20],
-    "entrance_offsets": [-0.5, 0, 0.5],
+    "objective": "balanced",
+    "heading_deltas_degrees": [0],
+    "entrance_offsets": [0],
+    "branch_start_positions": [24, 42, 60],
+    "branch_sides": ["left"],
+    "max_branches": 2,
+    "enable_connectors": true,
+    "connector_allow_outer_stall_row": true,
+    "connector_inset_depths": [0.0, 2.65, 5.3, 7.95],
+    "connector_throat_length": 3.0,
+    "connector_allow_l_shape_end_stalls": true,
+    "maneuver_l_shape_fallback": true,
+    "promote_candidate_layout_preview": true,
     "branch_start_step": 2.5,
     "weights": {
       "stall_count": 100.0,
-      "aisle_area": -1.0,
-      "heading_delta": -2.0,
-      "entrance_offset": -3.0,
-      "branch_count": -15.0,
-      "dead_end_length": -0.5
+      "aisle_area": 0.0,
+      "heading_delta": 0.0,
+      "entrance_offset": 0.0,
+      "branch_count": 0.0,
+      "dead_end_length": -12.0
     }
   },
   "diagnostics": {
@@ -187,6 +197,6 @@
   "metadata": {
     "author": "OpenParkCAD",
     "coordinate_system": "local meters",
-    "notes": "Phase 0 sample with future-facing fields."
+    "notes": "Large Phase 0 sample sized to exercise branch, candidate-network, and candidate-layout previews."
   }
 }

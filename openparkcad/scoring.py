@@ -47,9 +47,12 @@ DEFAULT_WEIGHTS = {
 
 
 def score_layout(layout: LayoutResult) -> dict[str, float]:
-    weights = _weights_for_site(layout.site)
     metrics = _metrics(layout)
+    return score_metrics(layout.site, metrics)
 
+
+def score_metrics(site: SiteSpec, metrics: dict[str, float]) -> dict[str, float]:
+    weights = _weights_for_site(site)
     stall_value = metrics["stall_count"] * weights.stall_count
     aisle_area_penalty = metrics["aisle_area"] * weights.aisle_area
     heading_penalty = metrics["heading_delta"] * weights.heading_delta
