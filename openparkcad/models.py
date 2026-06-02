@@ -153,6 +153,7 @@ class LayoutResult:
     score: dict[str, float] = field(default_factory=dict)
     graph_validation: dict[str, Any] = field(default_factory=dict)
     maneuver_validation: dict[str, Any] = field(default_factory=dict)
+    operational_quality: dict[str, Any] = field(default_factory=dict)
     candidate_objects: list[CandidateObject] = field(default_factory=list)
     candidate_selection: dict[str, Any] = field(default_factory=dict)
     candidate_network_preview: dict[str, Any] = field(default_factory=dict)

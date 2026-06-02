@@ -210,6 +210,9 @@ Phase 4C-4D turns that fixed inset into a small candidate search. You can set
 solver try flush, half-stall, one-stall, and one-and-a-half-stall connector
 positions automatically. Reports and previews now include
 `connector_inset_depth` so the selected U-connector position is auditable.
+Phase 5A adds `operational_quality`, a report-only soft-risk layer for junction
+and entrance-throat stall conflicts. The score includes `operational_risk` and
+`operational_risk_penalty`, but these checks do not hard-reject layouts yet.
 
 You can tune these maneuver checks with:
 
@@ -220,7 +223,9 @@ You can tune these maneuver checks with:
   "maneuver_turn_buffer_length": 2.5,
   "maneuver_turn_coverage_ratio": 0.95,
   "maneuver_angled_access_depth": 5.2,
-  "maneuver_angled_turn_buffer_length": 1.25
+  "maneuver_angled_turn_buffer_length": 1.25,
+  "operational_junction_clearance_radius": 3.0,
+  "operational_entrance_clearance_radius": 4.0
 }
 ```
 
@@ -287,8 +292,8 @@ All dimensions are interpreted as meters.
 This is still an early algorithmic kernel. It now builds a graph for generated
 aisles and stalls, but it does not yet generate arbitrary road networks,
 intersections, narrow aisles, steering swept paths, turning-radius validation,
-fire access validation, slopes, local code profiles, accessible stalls, or
-per-stall mixed parking module optimization.
+hard operational-quality rejection, fire access validation, slopes, local code
+profiles, accessible stalls, or per-stall mixed parking module optimization.
 
 ## Design Notes
 

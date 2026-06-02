@@ -58,6 +58,8 @@ def build_input_diagnostics(site: SiteSpec, layout: LayoutResult | None = None) 
     if site.optimization:
         parsed_future_fields.append("optimization")
         warnings.append("optimization weights are active for Phase 1 scoring; candidate generation is still deliberately narrow")
+    if layout and layout.operational_quality:
+        warnings.append("operational quality checks are report-only soft risks in Phase 5A")
     unsupported = phase1_unsupported_inputs(site)
     warnings.extend(f"{item['field']} unsupported in Phase 1: {item['reason']}" for item in unsupported)
 
@@ -148,6 +150,7 @@ def build_input_diagnostics(site: SiteSpec, layout: LayoutResult | None = None) 
         },
         "candidate_layout_promotion": layout.candidate_layout_promotion if layout else {},
         "maneuver_validation": layout.maneuver_validation if layout else None,
+        "operational_quality": layout.operational_quality if layout else None,
         "active_stall_type": asdict(site.stall),
         "unsupported_phase1_inputs": unsupported,
         "stall_access": _stall_access(layout),
@@ -252,6 +255,15 @@ def _constraint_status(site: SiteSpec, layout: LayoutResult | None) -> list[dict
             ),
         },
         {
+            "constraint": "operational quality risk report",
+            "status": _operational_quality_status(layout),
+            "note": (
+                "Phase 5A reports junction and entrance-throat stall conflicts as soft scoring risks."
+                if _operational_quality_status(layout) == "active"
+                else "Operational quality checks are only available after layout generation."
+            ),
+        },
+        {
             "constraint": "vehicle turning radius",
             "status": "future",
             "note": "Vehicle data is parsed but swept path and turning-radius checks are not implemented yet.",
@@ -313,6 +325,9 @@ def _field_support(site: SiteSpec, layout: LayoutResult | None) -> dict[str, str
         "constraints.turning_sweep_proxy": _maneuver_status(layout),
         "constraints.maneuver_l_shape_fallback": _maneuver_status(layout),
         "constraints.maneuver_rule_dispatch": _maneuver_status(layout),
+        "constraints.operational_quality": _operational_quality_status(layout),
+        "constraints.junction_conflict_points": _operational_quality_status(layout),
+        "constraints.entrance_throat_blockage": _operational_quality_status(layout),
         "constraints.turning_radius": "future",
         "constraints.swept_path": "future",
         "optimization.weights": "parsed_not_enforced" if site.optimization else "future",
@@ -324,6 +339,7 @@ def _field_support(site: SiteSpec, layout: LayoutResult | None) -> dict[str, str
         "optimization.candidate_shadow_branch_turnarounds": "active" if _shadow_turnarounds_active(layout) else "future",
         "optimization.connector_inset_depths": "active" if layout and site.optimization.get("enable_connectors", True) else "future",
         "optimization.connector_l_shape_end_stalls": "active" if layout and site.optimization.get("enable_connectors", True) else "future",
+        "optimization.operational_risk_weight": "active" if layout else "future",
         "optimization.candidate_layout_preview": "active" if layout and layout.candidate_layout_preview else "future",
         "optimization.candidate_layout_preview_scoring": "active" if _layout_preview_comparison(layout) else "future",
         "optimization.promote_candidate_layout_preview": _candidate_layout_promotion_status(layout),
@@ -511,6 +527,12 @@ def _maneuver_status(layout: LayoutResult | None) -> str:
     if not validation:
         return "future"
     return "active" if validation.get("valid") else "active_failed"
+
+
+def _operational_quality_status(layout: LayoutResult | None) -> str:
+    if not layout or not layout.operational_quality:
+        return "future"
+    return "active" if layout.operational_quality.get("valid", True) else "active_failed"
 
 
 def _angled_maneuver_status(site: SiteSpec, layout: LayoutResult | None) -> str:

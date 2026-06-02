@@ -60,6 +60,7 @@ def _maybe_promote_candidate_layout(layout: LayoutResult) -> LayoutResult:
     validation = layout.candidate_layout_preview.get("validation", {})
     graph = validation.get("traffic_graph", {}) if isinstance(validation, dict) else {}
     maneuver = validation.get("maneuver_validation", {}) if isinstance(validation, dict) else {}
+    operational = validation.get("operational_quality", {}) if isinstance(validation, dict) else {}
     promoted = replace(
         layout,
         aisles=preview_layout.aisles,
@@ -68,6 +69,7 @@ def _maybe_promote_candidate_layout(layout: LayoutResult) -> LayoutResult:
         score=_preview_score(layout),
         graph_validation=graph if isinstance(graph, dict) else {},
         maneuver_validation=maneuver if isinstance(maneuver, dict) else {},
+        operational_quality=operational if isinstance(operational, dict) else {},
         candidate_layout_promotion=_promotion_report(layout, "promoted"),
     )
     return promoted

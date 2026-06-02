@@ -185,7 +185,8 @@
       "heading_delta": 0.0,
       "entrance_offset": 0.0,
       "branch_count": 0.0,
-      "dead_end_length": -12.0
+      "dead_end_length": -12.0,
+      "operational_risk": -0.25
     }
   },
   "diagnostics": {

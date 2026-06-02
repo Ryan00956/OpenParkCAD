@@ -6,6 +6,7 @@ from typing import Any
 from shapely.geometry import Polygon as ShapelyPolygon
 
 from openparkcad.models import LayoutResult, SiteSpec
+from openparkcad.operational_quality import operational_risk_score
 
 
 @dataclass(frozen=True)
@@ -16,6 +17,7 @@ class ScoreWeights:
     entrance_offset: float
     branch_count: float
     dead_end_length: float
+    operational_risk: float
 
 
 DEFAULT_WEIGHTS = {
@@ -26,6 +28,7 @@ DEFAULT_WEIGHTS = {
         entrance_offset=-1.0,
         branch_count=-5.0,
         dead_end_length=-0.2,
+        operational_risk=-0.1,
     ),
     "balanced": ScoreWeights(
         stall_count=100.0,
@@ -34,6 +37,7 @@ DEFAULT_WEIGHTS = {
         entrance_offset=-3.0,
         branch_count=-15.0,
         dead_end_length=-0.5,
+        operational_risk=-0.25,
     ),
     "conservative": ScoreWeights(
         stall_count=90.0,
@@ -42,6 +46,7 @@ DEFAULT_WEIGHTS = {
         entrance_offset=-6.0,
         branch_count=-30.0,
         dead_end_length=-1.0,
+        operational_risk=-1.0,
     ),
 }
 
@@ -59,7 +64,16 @@ def score_metrics(site: SiteSpec, metrics: dict[str, float]) -> dict[str, float]
     entrance_offset_penalty = metrics["entrance_offset"] * weights.entrance_offset
     branch_penalty = metrics["branch_count"] * weights.branch_count
     dead_end_penalty = metrics["dead_end_length"] * weights.dead_end_length
-    total = stall_value + aisle_area_penalty + heading_penalty + entrance_offset_penalty + branch_penalty + dead_end_penalty
+    operational_risk_penalty = metrics.get("operational_risk", 0.0) * weights.operational_risk
+    total = (
+        stall_value
+        + aisle_area_penalty
+        + heading_penalty
+        + entrance_offset_penalty
+        + branch_penalty
+        + dead_end_penalty
+        + operational_risk_penalty
+    )
 
     return {
         "total": total,
@@ -69,12 +83,14 @@ def score_metrics(site: SiteSpec, metrics: dict[str, float]) -> dict[str, float]
         "entrance_offset_penalty": entrance_offset_penalty,
         "branch_penalty": branch_penalty,
         "dead_end_penalty": dead_end_penalty,
+        "operational_risk_penalty": operational_risk_penalty,
         "stall_count": metrics["stall_count"],
         "aisle_area": metrics["aisle_area"],
         "heading_delta": metrics["heading_delta"],
         "entrance_offset": metrics["entrance_offset"],
         "branch_count": metrics["branch_count"],
         "dead_end_length": metrics["dead_end_length"],
+        "operational_risk": metrics.get("operational_risk", 0.0),
     }
 
 
@@ -95,6 +111,7 @@ def _weights_for_site(site: SiteSpec) -> ScoreWeights:
         entrance_offset=float(overrides.get("entrance_offset", base.entrance_offset)),
         branch_count=float(overrides.get("branch_count", base.branch_count)),
         dead_end_length=float(overrides.get("dead_end_length", base.dead_end_length)),
+        operational_risk=float(overrides.get("operational_risk", base.operational_risk)),
     )
 
 
@@ -109,6 +126,7 @@ def _metrics(layout: LayoutResult) -> dict[str, float]:
         "entrance_offset": abs(layout.selected_entrance_offset),
         "branch_count": branch_count,
         "dead_end_length": dead_end_length,
+        "operational_risk": operational_risk_score(layout),
     }
 
 

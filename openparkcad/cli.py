@@ -79,6 +79,7 @@ def _write_report(layout, path: str) -> None:
         "candidate_layout_preview": candidate_layout_preview_report(layout),
         "candidate_layout_promotion": layout.candidate_layout_promotion,
         "maneuver_validation": layout.maneuver_validation,
+        "operational_quality": layout.operational_quality,
         "unsupported_phase1_inputs": layout.unsupported_phase1_inputs,
         "aisles": [
             {

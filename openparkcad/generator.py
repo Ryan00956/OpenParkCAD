@@ -6,6 +6,7 @@ from itertools import product
 from openparkcad.candidate_snapshot import attach_candidate_snapshot
 from openparkcad.maneuver_validation import apply_maneuver_filter
 from openparkcad.models import AngleAttempt, LayoutResult, SiteSpec, StallSpec
+from openparkcad.operational_quality import operational_quality_report
 from openparkcad.phase1_candidates import iter_phase1_candidates
 from openparkcad.phase1_support import phase1_unsupported_inputs
 from openparkcad.scoring import score_layout, score_total
@@ -106,14 +107,16 @@ def _generate_layout_for_site(site: SiteSpec) -> LayoutResult:
 
     if best is None:
         return _with_score(
-            _with_graph_validation(
-                apply_maneuver_filter(
-                    LayoutResult(
-                        site=site,
-                        stalls=[],
-                        generation_mode="phase1_main_aisle",
-                        attempts=attempts,
-                        unsupported_phase1_inputs=unsupported,
+            _with_operational_quality(
+                _with_graph_validation(
+                    apply_maneuver_filter(
+                        LayoutResult(
+                            site=site,
+                            stalls=[],
+                            generation_mode="phase1_main_aisle",
+                            attempts=attempts,
+                            unsupported_phase1_inputs=unsupported,
+                        )
                     )
                 )
             )
@@ -138,6 +141,7 @@ def _generate_layout_for_site(site: SiteSpec) -> LayoutResult:
         selected_stall_type_id=best.site.stall.id,
         graph_validation=best.graph_validation,
         maneuver_validation=best.maneuver_validation,
+        operational_quality=best.operational_quality,
         unsupported_phase1_inputs=unsupported,
     )
     return _with_score(result)
@@ -226,8 +230,13 @@ def _with_graph_validation(layout: LayoutResult) -> LayoutResult:
     return layout
 
 
+def _with_operational_quality(layout: LayoutResult) -> LayoutResult:
+    object.__setattr__(layout, "operational_quality", operational_quality_report(layout))
+    return layout
+
+
 def _finalize_candidate(layout: LayoutResult) -> LayoutResult:
-    return _with_score(_with_graph_validation(apply_maneuver_filter(layout)))
+    return _with_score(_with_operational_quality(_with_graph_validation(apply_maneuver_filter(layout))))
 
 
 def _graph_valid(layout: LayoutResult) -> bool:

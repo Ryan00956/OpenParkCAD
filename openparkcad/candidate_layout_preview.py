@@ -8,6 +8,7 @@ from openparkcad.candidate_network_preview import candidate_network_preview_repo
 from openparkcad.layout_geometry import available_area
 from openparkcad.maneuver_validation import apply_maneuver_filter, validate_maneuvers
 from openparkcad.models import LayoutResult, ParkingAisle, ParkingStall
+from openparkcad.operational_quality import operational_quality_report
 from openparkcad.scoring import score_metrics
 from openparkcad.traffic_graph import traffic_graph_summary
 
@@ -206,6 +207,7 @@ def _validate_layout_preview(
     containment = _containment_validation(source_layout, aisles, stalls)
     maneuver = validate_maneuvers(preview_layout)
     graph = traffic_graph_summary(preview_layout)
+    operational = operational_quality_report(preview_layout)
     association = _stall_association_validation(aisles, stalls)
     errors: list[str] = []
     if not containment["valid"]:
@@ -224,6 +226,7 @@ def _validate_layout_preview(
         "geometry_containment": containment,
         "stall_association": association,
         "maneuver_validation": maneuver,
+        "operational_quality": operational,
         "traffic_graph": graph,
     }
 
@@ -233,6 +236,8 @@ def _preview_score(
     aisles: list[dict[str, object]],
     stalls: list[dict[str, object]],
 ) -> dict[str, float]:
+    preview_layout = _preview_layout(layout, aisles, stalls)
+    operational = operational_quality_report(preview_layout)
     metrics = {
         "stall_count": float(len(stalls)),
         "aisle_area": sum(float(aisle.get("area", 0.0)) for aisle in aisles),
@@ -240,6 +245,7 @@ def _preview_score(
         "entrance_offset": abs(layout.selected_entrance_offset),
         "branch_count": float(len([aisle for aisle in aisles if aisle.get("role") == "branch"])),
         "dead_end_length": _preview_dead_end_length(aisles),
+        "operational_risk": float(operational["risk_score"]),
     }
     return score_metrics(layout.site, metrics)
 

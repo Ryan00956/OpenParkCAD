@@ -973,6 +973,37 @@ Checks to add:
 - disallowed patterns are rejected,
 - reports distinguish invalid constraints from soft penalties.
 
+### Phase 5A: Junction And Entrance Soft-Risk Report
+
+The first operational-quality slice is report-only. It does not declare a
+layout illegal, but it gives the scoring layer a measurable discomfort signal.
+
+Current rules:
+
+- `operational_quality` is attached to every generated layout.
+- The report detects aisle-pair junctions from intersecting aisle geometry.
+- Each junction receives a circular clearance zone controlled by
+  `optimization.operational_junction_clearance_radius`, defaulting to half the
+  selected aisle width.
+- Each entrance receives a throat clearance zone controlled by
+  `optimization.operational_entrance_clearance_radius`, defaulting to the larger
+  of half aisle width and half entrance width.
+- Stalls intersecting these zones are reported as soft conflicts with overlap
+  area and distance to the zone center.
+- `operational_quality.risk_score` is the current soft-risk metric.
+- The score includes `operational_risk` and `operational_risk_penalty`.
+- `optimization.weights.operational_risk` controls how strongly the score
+  penalizes these risks.
+- Candidate layout preview scoring uses the same operational-risk metric as the
+  official layout score.
+
+Non-goals for this slice:
+
+- no hard rejection yet,
+- no vehicle trajectory simulation,
+- no narrow two-way deadlock logic,
+- no conflict-point capacity model.
+
 ## Implementation Principle
 
 Keep these layers separate in code:
