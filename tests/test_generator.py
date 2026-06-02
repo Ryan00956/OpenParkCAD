@@ -1,7 +1,7 @@
 from shapely.geometry import Polygon as ShapelyPolygon
 
 from openparkcad import diagnostics
-from openparkcad.candidate_layout_preview import candidate_layout_preview_report
+from openparkcad.candidate_layout_preview import _promotion_blockers, candidate_layout_preview_report
 from openparkcad.candidate_network_preview import candidate_network_preview_report
 from openparkcad.candidate_selector import select_candidate_objects
 from openparkcad.candidate_snapshot import candidate_snapshot_report
@@ -178,6 +178,18 @@ def test_phase4b_shadow_selector_can_select_compatible_branch_candidates():
         if candidate.id not in selected_ids:
             continue
         assert not selected_ids.intersection(candidate.conflict_ids)
+
+
+def test_phase5b_operational_quality_blocker_can_stop_preview_promotion():
+    validation = {
+        "valid": True,
+        "traffic_graph": {"dead_ends": []},
+        "operational_quality": {
+            "promotion_blockers": ["operational_quality_risk_exceeds_limit"],
+        },
+    }
+
+    assert _promotion_blockers(validation, score_delta=10.0) == ["operational_quality_risk_exceeds_limit"]
 
 
 def test_phase4c_shadow_selector_respects_connector_dependencies():

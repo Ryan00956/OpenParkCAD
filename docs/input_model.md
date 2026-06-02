@@ -978,7 +978,9 @@ optimization maneuver_angled_access_coverage_ratio active for angled validator p
 optimization maneuver_angled_turn_coverage_ratio active for angled validator proxy
 optimization operational_junction_clearance_radius active for Phase 5A soft-risk report
 optimization operational_entrance_clearance_radius active for Phase 5A soft-risk report
-optimization weights.operational_risk active for Phase 5A soft-risk scoring
+optimization operational_quality_mode   active for Phase 5B score/gate/reject mode
+optimization operational_max_risk_score active for Phase 5B risk threshold
+optimization weights.operational_risk active for Phase 5B soft-risk scoring
 optimization weights                    active for Phase 1 scoring
 optimization score breakdown            active in JSON report
 optimization promote_candidate_layout_preview active as guarded opt-in
@@ -988,7 +990,7 @@ report selected_connectors              active, includes removed and added stall
 report traffic_graph validation          active in JSON report
 report maneuver_validation              active in JSON report
 report maneuver_validation rule_counts  active in JSON report
-report operational_quality              active as Phase 5A report-only soft risk
+report operational_quality              active as Phase 5B score/gate/reject risk report
 report selected_stall_type_id           active in JSON report
 report stall_type_attempts              active in JSON report
 report selected_stall_assignment        active in JSON report

@@ -14,16 +14,42 @@ def operational_quality_report(layout: LayoutResult) -> dict[str, Any]:
     junction_conflicts = sum(len(item["conflicting_stalls"]) for item in junctions)
     entrance_conflicts = sum(len(item["conflicting_stalls"]) for item in entrance_throats)
     risk_score = float(junction_conflicts + entrance_conflicts)
+    mode = _operational_quality_mode(layout.site)
+    max_allowed_risk_score = _max_allowed_risk_score(layout.site)
+    risk_exceeds_limit = (
+        max_allowed_risk_score is not None
+        and risk_score > max_allowed_risk_score + 1e-9
+    )
+    blocking_conflicts = (
+        _blocking_conflicts(junctions, entrance_throats)
+        if mode in {"promotion_gate", "hard_reject"} and risk_exceeds_limit
+        else []
+    )
+    promotion_blockers = (
+        ["operational_quality_risk_exceeds_limit"]
+        if mode in {"promotion_gate", "hard_reject"} and risk_exceeds_limit
+        else []
+    )
+    valid = not (mode == "hard_reject" and risk_exceeds_limit)
     warnings: list[str] = []
     if junction_conflicts:
         warnings.append(f"{junction_conflicts} stall-junction clearance conflicts are reported as soft risks")
     if entrance_conflicts:
         warnings.append(f"{entrance_conflicts} stall-entrance throat conflicts are reported as soft risks")
+    if risk_exceeds_limit:
+        warnings.append(
+            f"operational risk score {risk_score:g} exceeds configured limit {max_allowed_risk_score:g}"
+        )
     return {
-        "version": "phase5a-1",
-        "status": "report_only",
-        "valid": True,
+        "version": "phase5b-1",
+        "status": "active_failed" if not valid else "report_only",
+        "mode": mode,
+        "valid": valid,
         "risk_score": risk_score,
+        "max_allowed_risk_score": max_allowed_risk_score,
+        "risk_exceeds_limit": risk_exceeds_limit,
+        "promotion_blockers": promotion_blockers,
+        "blocking_conflicts": blocking_conflicts,
         "junction_count": len(junctions),
         "junction_conflict_count": junction_conflicts,
         "entrance_throat_count": len(entrance_throats),
@@ -130,6 +156,67 @@ def _entrance_clearance_radius(site: SiteSpec, entrance_width: float) -> float:
     default = max(site.aisle_width / 2, entrance_width / 2)
     raw = site.optimization.get("operational_entrance_clearance_radius", default)
     return _nonnegative_float(raw, default)
+
+
+def _operational_quality_mode(site: SiteSpec) -> str:
+    raw = site.optimization.get("operational_quality_mode", "score_only")
+    mode = str(raw)
+    if mode in {"score_only", "promotion_gate", "hard_reject"}:
+        return mode
+    return "score_only"
+
+
+def _max_allowed_risk_score(site: SiteSpec) -> float | None:
+    raw = site.optimization.get("operational_max_risk_score")
+    if raw is None:
+        return None
+    try:
+        return max(float(raw), 0.0)
+    except (TypeError, ValueError):
+        return None
+
+
+def _blocking_conflicts(
+    junctions: list[dict[str, Any]],
+    entrance_throats: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    conflicts: list[dict[str, Any]] = []
+    for junction in junctions:
+        for stall in _stall_conflicts(junction):
+            conflicts.append(
+                {
+                    "source_type": "junction",
+                    "source_id": junction["id"],
+                    "aisle_ids": list(junction["aisle_ids"]),
+                    "stall_id": stall["stall_id"],
+                    "served_by_aisle_id": stall["served_by_aisle_id"],
+                    "aisle_side": stall["aisle_side"],
+                    "overlap_area": stall["overlap_area"],
+                    "distance_to_center": stall["distance_to_center"],
+                }
+            )
+    for throat in entrance_throats:
+        for stall in _stall_conflicts(throat):
+            conflicts.append(
+                {
+                    "source_type": "entrance_throat",
+                    "source_id": throat["id"],
+                    "entrance_id": throat["entrance_id"],
+                    "stall_id": stall["stall_id"],
+                    "served_by_aisle_id": stall["served_by_aisle_id"],
+                    "aisle_side": stall["aisle_side"],
+                    "overlap_area": stall["overlap_area"],
+                    "distance_to_center": stall["distance_to_center"],
+                }
+            )
+    return conflicts
+
+
+def _stall_conflicts(report_item: dict[str, Any]) -> list[dict[str, Any]]:
+    raw = report_item.get("conflicting_stalls", [])
+    if not isinstance(raw, list):
+        return []
+    return [item for item in raw if isinstance(item, dict)]
 
 
 def _nonnegative_float(raw: object, default: float) -> float:

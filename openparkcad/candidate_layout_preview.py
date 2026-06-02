@@ -216,6 +216,8 @@ def _validate_layout_preview(
         errors.append("preview_layout_maneuver_invalid")
     if not graph["valid"]:
         errors.append("preview_layout_traffic_graph_invalid")
+    if not operational["valid"]:
+        errors.append("preview_layout_operational_quality_invalid")
     if not association["valid"]:
         errors.append("preview_layout_stall_association_invalid")
     return {
@@ -289,6 +291,7 @@ def _promotion_blockers(validation: dict[str, object], score_delta: float) -> li
     blockers: list[str] = []
     if not bool(validation.get("valid")):
         blockers.append("preview_validation_failed")
+    blockers.extend(_operational_quality_blockers(validation))
     if _dead_ends_without_turnaround(validation):
         blockers.append("preview_has_dead_end_without_turnaround")
     if score_delta < 0:
@@ -314,6 +317,16 @@ def _dead_ends_without_turnaround(validation: dict[str, object]) -> list[dict[st
         for item in dead_ends
         if isinstance(item, dict) and item.get("status") == "dead_end_without_turnaround"
     ]
+
+
+def _operational_quality_blockers(validation: dict[str, object]) -> list[str]:
+    operational = validation.get("operational_quality", {})
+    if not isinstance(operational, dict):
+        return []
+    blockers = operational.get("promotion_blockers", [])
+    if not isinstance(blockers, list):
+        return []
+    return [str(item) for item in blockers]
 
 
 def _preview_dead_end_length(aisles: list[dict[str, object]]) -> float:

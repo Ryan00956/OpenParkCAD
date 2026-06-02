@@ -1004,6 +1004,29 @@ Non-goals for this slice:
 - no narrow two-way deadlock logic,
 - no conflict-point capacity model.
 
+### Phase 5B: Configurable Operational Quality Gates
+
+The operational-quality report can now move from pure scoring into guarded
+decision making when the input explicitly asks for it.
+
+Current rules:
+
+- `optimization.operational_quality_mode` controls behavior.
+- `score_only` is the default and preserves Phase 5A behavior: risks are
+  reported and scored, but they do not block a layout.
+- `promotion_gate` keeps a preview layout valid, but prevents candidate layout
+  promotion when the configured risk limit is exceeded.
+- `hard_reject` marks the checked layout invalid when the configured risk limit
+  is exceeded.
+- `optimization.operational_max_risk_score` sets the limit. If omitted, no
+  operational risk limit is enforced.
+- Reports include `risk_exceeds_limit`, `promotion_blockers`, and
+  `blocking_conflicts` so rejected promotions explain which stall conflicts
+  caused the gate to close.
+- Candidate layout promotion now consumes operational-quality blockers in the
+  same comparison report that already checks geometry, maneuvers, graph
+  validity, dead ends, and score delta.
+
 ## Implementation Principle
 
 Keep these layers separate in code:

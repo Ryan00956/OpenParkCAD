@@ -59,7 +59,8 @@ def build_input_diagnostics(site: SiteSpec, layout: LayoutResult | None = None) 
         parsed_future_fields.append("optimization")
         warnings.append("optimization weights are active for Phase 1 scoring; candidate generation is still deliberately narrow")
     if layout and layout.operational_quality:
-        warnings.append("operational quality checks are report-only soft risks in Phase 5A")
+        mode = layout.operational_quality.get("mode", "score_only")
+        warnings.append(f"operational quality checks are active in {mode} mode for Phase 5B")
     unsupported = phase1_unsupported_inputs(site)
     warnings.extend(f"{item['field']} unsupported in Phase 1: {item['reason']}" for item in unsupported)
 
@@ -258,7 +259,7 @@ def _constraint_status(site: SiteSpec, layout: LayoutResult | None) -> list[dict
             "constraint": "operational quality risk report",
             "status": _operational_quality_status(layout),
             "note": (
-                "Phase 5A reports junction and entrance-throat stall conflicts as soft scoring risks."
+                "Phase 5B reports junction and entrance-throat stall conflicts and can use configured modes to score, gate promotion, or hard-reject risky layouts."
                 if _operational_quality_status(layout) == "active"
                 else "Operational quality checks are only available after layout generation."
             ),
@@ -340,6 +341,8 @@ def _field_support(site: SiteSpec, layout: LayoutResult | None) -> dict[str, str
         "optimization.connector_inset_depths": "active" if layout and site.optimization.get("enable_connectors", True) else "future",
         "optimization.connector_l_shape_end_stalls": "active" if layout and site.optimization.get("enable_connectors", True) else "future",
         "optimization.operational_risk_weight": "active" if layout else "future",
+        "optimization.operational_quality_mode": "active" if layout else "future",
+        "optimization.operational_max_risk_score": "active" if layout else "future",
         "optimization.candidate_layout_preview": "active" if layout and layout.candidate_layout_preview else "future",
         "optimization.candidate_layout_preview_scoring": "active" if _layout_preview_comparison(layout) else "future",
         "optimization.promote_candidate_layout_preview": _candidate_layout_promotion_status(layout),
