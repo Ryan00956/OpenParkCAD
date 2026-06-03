@@ -1054,6 +1054,28 @@ Current rules:
 - Reports include `route_risk_score`, `route_risk_count`, and
   `route_risks.routes`.
 
+### Phase 5D: Route Risk Summary Metrics
+
+The route-risk report now includes a compact summary layer so users and later
+optimization code can understand circulation quality without scanning every
+stall route.
+
+Current rules:
+
+- `operational_quality.route_summary` mirrors
+  `operational_quality.route_risks.summary`.
+- The summary reports checked stall count, route count with finite length,
+  average route length, maximum route length, maximum entry path length, and
+  maximum exit path length.
+- The summary identifies the stall with the longest route.
+- The summary counts stalls whose serving aisle depends on a dead-end
+  turnaround.
+- The summary counts missing entry paths, missing exit paths, excessive route
+  length issues, and configured turnaround-dependency issues.
+- The summary is diagnostic by default. It does not add new risk by itself;
+  risk still comes from the Phase 5C route issue rules and the existing
+  operational-quality mode.
+
 ## Implementation Principle
 
 Keep these layers separate in code:

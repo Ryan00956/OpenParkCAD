@@ -982,7 +982,7 @@ optimization operational_quality_mode   active for Phase 5B score/gate/reject mo
 optimization operational_max_risk_score active for Phase 5B risk threshold
 optimization operational_max_route_length active for Phase 5C route risk threshold
 optimization operational_turnaround_dependency_risk active for Phase 5C turnaround dependency penalty
-optimization weights.operational_risk active for Phase 5C soft-risk scoring
+optimization weights.operational_risk active for Phase 5D soft-risk scoring
 optimization weights                    active for Phase 1 scoring
 optimization score breakdown            active in JSON report
 optimization promote_candidate_layout_preview active as guarded opt-in
@@ -992,7 +992,7 @@ report selected_connectors              active, includes removed and added stall
 report traffic_graph validation          active in JSON report
 report maneuver_validation              active in JSON report
 report maneuver_validation rule_counts  active in JSON report
-report operational_quality              active as Phase 5C local and route risk report
+report operational_quality              active as Phase 5D local, route, and route-summary risk report
 report selected_stall_type_id           active in JSON report
 report stall_type_attempts              active in JSON report
 report selected_stall_assignment        active in JSON report

@@ -47,7 +47,7 @@ def operational_quality_report(layout: LayoutResult) -> dict[str, Any]:
     if route_risk_score:
         warnings.append(f"{route_risk_score:g} route-level operational risk score is reported")
     return {
-        "version": "phase5c-1",
+        "version": "phase5d-1",
         "status": "active_failed" if not valid else "report_only",
         "mode": mode,
         "valid": valid,
@@ -62,6 +62,7 @@ def operational_quality_report(layout: LayoutResult) -> dict[str, Any]:
         "entrance_throat_conflict_count": entrance_conflicts,
         "route_risk_score": route_risk_score,
         "route_risk_count": route_risks["risk_count"],
+        "route_summary": route_risks["summary"],
         "warnings": warnings,
         "junctions": junctions,
         "entrance_throats": entrance_throats,
@@ -183,7 +184,7 @@ def _route_risk_reports(layout: LayoutResult) -> dict[str, Any]:
     )
     if not entry_nodes or not exit_nodes:
         return {
-            "version": "phase5c-1",
+            "version": "phase5d-1",
             "status": "not_checked_no_entrance_or_exit",
             "route_length_model": "aisle_node_centroid_graph",
             "checked_stall_count": 0,
@@ -191,6 +192,7 @@ def _route_risk_reports(layout: LayoutResult) -> dict[str, Any]:
             "risk_score": 0.0,
             "max_route_length": max_route_length,
             "turnaround_dependency_risk": turnaround_dependency_risk,
+            "summary": _route_summary([]),
             "routes": [],
         }
 
@@ -245,7 +247,7 @@ def _route_risk_reports(layout: LayoutResult) -> dict[str, Any]:
         )
 
     return {
-        "version": "phase5c-1",
+        "version": "phase5d-1",
         "status": "active",
         "route_length_model": "aisle_node_centroid_graph",
         "checked_stall_count": len(routes),
@@ -253,7 +255,50 @@ def _route_risk_reports(layout: LayoutResult) -> dict[str, Any]:
         "risk_score": float(risk_score),
         "max_route_length": max_route_length,
         "turnaround_dependency_risk": turnaround_dependency_risk,
+        "summary": _route_summary(routes),
         "routes": routes,
+    }
+
+
+def _route_summary(routes: list[dict[str, Any]]) -> dict[str, Any]:
+    finite_routes = [
+        route
+        for route in routes
+        if isinstance(route.get("route_length"), int | float)
+    ]
+    issue_counts: dict[str, int] = {}
+    for route in routes:
+        issues = route.get("issues", [])
+        if not isinstance(issues, list):
+            continue
+        for issue in issues:
+            issue_counts[str(issue)] = issue_counts.get(str(issue), 0) + 1
+    turnaround_dependency_count = len(
+        [
+            route
+            for route in routes
+            if bool(route.get("depends_on_dead_end_turnaround"))
+        ]
+    )
+    return {
+        "checked_stall_count": len(routes),
+        "route_with_length_count": len(finite_routes),
+        "average_route_length": _average_route_length(finite_routes),
+        "max_route_length": _max_route_length(finite_routes),
+        "max_entry_path_length": _max_path_length(routes, "entry_path_length"),
+        "max_exit_path_length": _max_path_length(routes, "exit_path_length"),
+        "longest_route_stall_id": _longest_route_stall_id(finite_routes),
+        "turnaround_dependency_count": turnaround_dependency_count,
+        "turnaround_dependency_ratio": (
+            float(turnaround_dependency_count / len(routes))
+            if routes
+            else 0.0
+        ),
+        "missing_entry_path_count": issue_counts.get("missing_entry_path", 0),
+        "missing_exit_path_count": issue_counts.get("missing_exit_path", 0),
+        "route_length_exceeds_limit_count": issue_counts.get("route_length_exceeds_limit", 0),
+        "depends_on_dead_end_turnaround_count": issue_counts.get("depends_on_dead_end_turnaround", 0),
+        "issue_counts": issue_counts,
     }
 
 
@@ -304,6 +349,35 @@ def _add_weighted_arc(adjacency: dict[str, list[tuple[str, float]]], source: str
 
 def _finite_distance(value: float | None) -> float | None:
     return None if value is None else float(value)
+
+
+def _average_route_length(routes: list[dict[str, Any]]) -> float | None:
+    if not routes:
+        return None
+    return float(sum(float(route["route_length"]) for route in routes) / len(routes))
+
+
+def _max_route_length(routes: list[dict[str, Any]]) -> float | None:
+    if not routes:
+        return None
+    return float(max(float(route["route_length"]) for route in routes))
+
+
+def _max_path_length(routes: list[dict[str, Any]], key: str) -> float | None:
+    values = [
+        float(route[key])
+        for route in routes
+        if isinstance(route.get(key), int | float)
+    ]
+    return max(values) if values else None
+
+
+def _longest_route_stall_id(routes: list[dict[str, Any]]) -> str | None:
+    if not routes:
+        return None
+    longest = max(routes, key=lambda item: float(item["route_length"]))
+    stall_id = longest.get("stall_id")
+    return str(stall_id) if stall_id is not None else None
 
 
 def _operational_quality_mode(site: SiteSpec) -> str:
