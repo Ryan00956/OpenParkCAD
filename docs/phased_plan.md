@@ -1244,6 +1244,29 @@ Current rules:
   sight distance, courtesy priority, queueing, or passing bay entry/exit swept
   paths.
 
+### Phase 5L: Passing Bay Gap Segment Report
+
+Passing bay spacing is now reported as explicit gap segments instead of only a
+single longest-gap number.
+
+Current rules:
+
+- Each gap records the start anchor and end anchor.
+- Anchor kinds are `aisle_endpoint` and `passing_bay`.
+- Gap segment types are:
+  - `no_passing_bay_full_aisle`
+  - `endpoint_to_passing_bay`
+  - `passing_bay_to_passing_bay`
+- Each gap records whether it exceeds
+  `optimization.operational_max_passing_bay_spacing`.
+- `operational_quality.narrow_two_way_summary.longest_passing_bay_gap_type`
+  reports the segment type of the longest gap.
+- `passing_bay_endpoint_gap_count` and
+  `passing_bay_spacing_exceeded_gap_count` summarize how much of the spacing
+  risk is endpoint-driven versus internal.
+- This is still not a traffic simulation, but it gives the later deadlock model
+  concrete road segments to reason about.
+
 ## Implementation Principle
 
 Keep these layers separate in code:

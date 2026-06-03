@@ -68,7 +68,7 @@ def operational_quality_report(layout: LayoutResult) -> dict[str, Any]:
     if narrow_two_way_risk_score:
         warnings.append(f"{narrow_two_way_risk_score:g} narrow two-way operational risk score is reported")
     return {
-        "version": "phase5k-1",
+        "version": "phase5l-1",
         "status": "active_failed" if not valid else "report_only",
         "mode": mode,
         "valid": valid,
@@ -448,7 +448,7 @@ def _narrow_two_way_risk_reports(layout: LayoutResult) -> dict[str, Any]:
             min_passing_bays,
         )
         return {
-            "version": "phase5k-1",
+            "version": "phase5l-1",
             "status": "not_applicable",
             "risk_count": 0,
             "risk_score": 0.0,
@@ -549,7 +549,7 @@ def _narrow_two_way_risk_reports(layout: LayoutResult) -> dict[str, Any]:
     )
     summary_risk_score = sum(float(item["risk_score"]) for item in summary_risks)
     return {
-        "version": "phase5k-1",
+        "version": "phase5l-1",
         "status": "active",
         "risk_count": (
             len([item for item in stall_issues if float(item["risk_score"]) > 0])
@@ -605,6 +605,8 @@ def _narrow_two_way_summary(
     invalid_passing_bay_count = len(passing_bay_reports) - usable_passing_bay_count
     spacing_issue_count = sum(1 for item in passing_bay_spacing_reports if item.get("issue"))
     longest_spacing = _max_report_value(passing_bay_spacing_reports, "longest_unserved_gap")
+    exceeded_gap_count = sum(int(item.get("exceeded_gap_count", 0)) for item in passing_bay_spacing_reports)
+    endpoint_gap_count = sum(int(item.get("endpoint_gap_count", 0)) for item in passing_bay_spacing_reports)
     shortage_count = (
         max(min_passing_bays - usable_passing_bay_count, 0)
         if is_narrow_two_way and min_passing_bays is not None
@@ -620,7 +622,10 @@ def _narrow_two_way_summary(
         "passing_bay_geometry_checked": is_narrow_two_way,
         "passing_bay_spacing_checked": bool(passing_bay_spacing_reports),
         "passing_bay_spacing_issue_count": spacing_issue_count,
+        "passing_bay_spacing_exceeded_gap_count": exceeded_gap_count,
+        "passing_bay_endpoint_gap_count": endpoint_gap_count,
         "longest_passing_bay_gap": longest_spacing,
+        "longest_passing_bay_gap_type": _longest_spacing_gap_type(passing_bay_spacing_reports, longest_spacing),
         "min_passing_bays": min_passing_bays,
         "passing_bay_shortage_count": shortage_count,
         "narrow_two_way_aisle_count": len(aisle_issues),
@@ -911,16 +916,11 @@ def _passing_bay_spacing_reports(
             continue
         assigned = usable_by_aisle.get(aisle.id, [])
         projected = _project_passing_bays(axis, assigned)
-        positions = sorted({0.0, float(axis.length), *(item["position_along_aisle"] for item in projected)})
-        gaps = [
-            {
-                "start": float(left),
-                "end": float(right),
-                "length": float(right - left),
-            }
-            for left, right in zip(positions, positions[1:], strict=False)
-        ]
+        anchors = _passing_bay_spacing_anchors(axis.length, projected)
+        gaps = _passing_bay_spacing_gaps(anchors, max_spacing)
         longest_gap = max((gap["length"] for gap in gaps), default=float(axis.length))
+        exceeded_gap_count = sum(1 for gap in gaps if gap["exceeds_limit"])
+        endpoint_gap_count = sum(1 for gap in gaps if gap["segment_type"] == "endpoint_to_passing_bay")
         issue = (
             "passing_bay_spacing_exceeds_limit"
             if max_spacing is not None and longest_gap > max_spacing + 1e-9
@@ -933,13 +933,85 @@ def _passing_bay_spacing_reports(
                 "usable_passing_bay_count": len(projected),
                 "projected_passing_bays": projected,
                 "gaps": gaps,
+                "gap_count": len(gaps),
+                "exceeded_gap_count": exceeded_gap_count,
+                "endpoint_gap_count": endpoint_gap_count,
                 "longest_unserved_gap": float(longest_gap),
+                "longest_unserved_gap_type": _longest_gap_type(gaps),
                 "max_passing_bay_spacing": max_spacing,
                 "issue": issue,
                 "risk_score": float(spacing_risk if issue else 0.0),
             }
         )
     return reports
+
+
+def _passing_bay_spacing_anchors(axis_length: float, projected: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    anchors = [
+        {
+            "kind": "aisle_endpoint",
+            "id": "start",
+            "position_along_aisle": 0.0,
+        },
+        *[
+            {
+                "kind": "passing_bay",
+                "id": item["passing_bay_id"],
+                "position_along_aisle": float(item["position_along_aisle"]),
+            }
+            for item in projected
+        ],
+        {
+            "kind": "aisle_endpoint",
+            "id": "end",
+            "position_along_aisle": float(axis_length),
+        },
+    ]
+    deduped: dict[tuple[str, str], dict[str, Any]] = {}
+    for anchor in anchors:
+        deduped[(anchor["kind"], anchor["id"])] = anchor
+    return sorted(deduped.values(), key=lambda item: item["position_along_aisle"])
+
+
+def _passing_bay_spacing_gaps(
+    anchors: list[dict[str, Any]],
+    max_spacing: float | None,
+) -> list[dict[str, Any]]:
+    gaps: list[dict[str, Any]] = []
+    for left, right in zip(anchors, anchors[1:], strict=False):
+        length = float(right["position_along_aisle"] - left["position_along_aisle"])
+        segment_type = _passing_bay_gap_type(left, right)
+        exceeds_limit = max_spacing is not None and length > max_spacing + 1e-9
+        gaps.append(
+            {
+                "start": float(left["position_along_aisle"]),
+                "end": float(right["position_along_aisle"]),
+                "length": length,
+                "start_kind": left["kind"],
+                "start_id": left["id"],
+                "end_kind": right["kind"],
+                "end_id": right["id"],
+                "segment_type": segment_type,
+                "exceeds_limit": exceeds_limit,
+                "issue": "passing_bay_gap_exceeds_limit" if exceeds_limit else None,
+            }
+        )
+    return gaps
+
+
+def _passing_bay_gap_type(left: dict[str, Any], right: dict[str, Any]) -> str:
+    if left["kind"] == "aisle_endpoint" and right["kind"] == "aisle_endpoint":
+        return "no_passing_bay_full_aisle"
+    if left["kind"] == "aisle_endpoint" or right["kind"] == "aisle_endpoint":
+        return "endpoint_to_passing_bay"
+    return "passing_bay_to_passing_bay"
+
+
+def _longest_gap_type(gaps: list[dict[str, Any]]) -> str | None:
+    if not gaps:
+        return None
+    longest = max(gaps, key=lambda item: float(item["length"]))
+    return str(longest["segment_type"])
 
 
 def _project_passing_bays(axis, passing_bays: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1335,6 +1407,18 @@ def _max_report_value(reports: list[dict[str, Any]], key: str) -> float | None:
     return max(values) if values else None
 
 
+def _longest_spacing_gap_type(reports: list[dict[str, Any]], longest_spacing: float | None) -> str | None:
+    if longest_spacing is None:
+        return None
+    for item in reports:
+        if not isinstance(item.get("longest_unserved_gap"), int | float):
+            continue
+        if abs(float(item["longest_unserved_gap"]) - longest_spacing) <= 1e-9:
+            gap_type = item.get("longest_unserved_gap_type")
+            return str(gap_type) if gap_type is not None else None
+    return None
+
+
 def _operational_quality_mode(site: SiteSpec) -> str:
     raw = site.optimization.get("operational_quality_mode", "score_only")
     mode = str(raw)
@@ -1558,7 +1642,9 @@ def _narrow_two_way_conflicts(narrow_two_way_risks: dict[str, Any]) -> list[dict
                     "issue": item["issue"],
                     "centerline_length": item["centerline_length"],
                     "usable_passing_bay_count": item["usable_passing_bay_count"],
+                    "exceeded_gap_count": item.get("exceeded_gap_count"),
                     "longest_unserved_gap": item["longest_unserved_gap"],
+                    "longest_unserved_gap_type": item.get("longest_unserved_gap_type"),
                     "max_passing_bay_spacing": item["max_passing_bay_spacing"],
                     "risk_score": item["risk_score"],
                 }

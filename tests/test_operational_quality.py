@@ -198,10 +198,10 @@ def _narrow_two_way_layout(
     )
 
 
-def test_phase5k_operational_quality_reports_junction_stall_conflicts():
+def test_phase5l_operational_quality_reports_junction_stall_conflicts():
     report = operational_quality_report(_quality_layout())
 
-    assert report["version"] == "phase5k-1"
+    assert report["version"] == "phase5l-1"
     assert report["status"] == "report_only"
     assert report["mode"] == "score_only"
     assert report["valid"] is True
@@ -302,11 +302,11 @@ def test_phase5g_operational_directionality_issue_ratio_can_gate_promotion():
     assert conflict["stall_issue_ratio"] == 1.0
 
 
-def test_phase5k_operational_narrow_two_way_reports_without_default_penalty():
+def test_phase5l_operational_narrow_two_way_reports_without_default_penalty():
     report = operational_quality_report(_narrow_two_way_layout())
 
     assert report["narrow_two_way_risks"]["status"] == "active"
-    assert report["narrow_two_way_risks"]["version"] == "phase5k-1"
+    assert report["narrow_two_way_risks"]["version"] == "phase5l-1"
     assert report["narrow_two_way_risk_score"] == 0.0
     assert report["narrow_two_way_summary"]["is_narrow_two_way"] is True
     assert report["narrow_two_way_summary"]["narrow_two_way_aisle_count"] == 1
@@ -317,15 +317,21 @@ def test_phase5k_operational_narrow_two_way_reports_without_default_penalty():
     assert report["narrow_two_way_summary"]["usable_passing_bay_count"] == 0
     assert report["narrow_two_way_summary"]["passing_bay_spacing_checked"] is True
     assert report["narrow_two_way_summary"]["longest_passing_bay_gap"] == 20.0
+    assert report["narrow_two_way_summary"]["longest_passing_bay_gap_type"] == "no_passing_bay_full_aisle"
+    assert report["narrow_two_way_summary"]["passing_bay_endpoint_gap_count"] == 0
     assert report["narrow_two_way_summary"]["passing_bay_shortage_count"] == 0
     assert report["narrow_two_way_risks"]["passing_bays"] == []
-    assert report["narrow_two_way_risks"]["passing_bay_spacing"][0]["longest_unserved_gap"] == 20.0
+    spacing = report["narrow_two_way_risks"]["passing_bay_spacing"][0]
+    assert spacing["longest_unserved_gap"] == 20.0
+    assert spacing["longest_unserved_gap_type"] == "no_passing_bay_full_aisle"
+    assert spacing["gaps"][0]["segment_type"] == "no_passing_bay_full_aisle"
+    assert spacing["gaps"][0]["exceeds_limit"] is False
     assert report["narrow_two_way_risks"]["aisle_issues"][0]["issue"] == "narrow_two_way_without_passing_bay_model"
     assert report["narrow_two_way_risks"]["stall_issues"][0]["issue"] == "stall_served_by_narrow_two_way_aisle_without_passing_bay_model"
     assert report["narrow_two_way_summary_risks"] == []
 
 
-def test_phase5k_operational_narrow_two_way_detects_usable_passing_bay_markers():
+def test_phase5l_operational_narrow_two_way_detects_usable_passing_bay_markers():
     layout = _narrow_two_way_layout(
         site_features=[
             {
@@ -346,6 +352,8 @@ def test_phase5k_operational_narrow_two_way_detects_usable_passing_bay_markers()
     assert report["narrow_two_way_summary"]["usable_passing_bay_count"] == 1
     assert report["narrow_two_way_summary"]["invalid_passing_bay_count"] == 0
     assert report["narrow_two_way_summary"]["longest_passing_bay_gap"] == 12.0
+    assert report["narrow_two_way_summary"]["longest_passing_bay_gap_type"] == "endpoint_to_passing_bay"
+    assert report["narrow_two_way_summary"]["passing_bay_endpoint_gap_count"] == 2
     assert report["narrow_two_way_summary"]["passing_bay_shortage_count"] == 0
     assert report["narrow_two_way_risks"]["passing_bays"][0]["id"] == "bay-1"
     assert report["narrow_two_way_risks"]["passing_bays"][0]["type"] == "passing_bay"
@@ -353,12 +361,16 @@ def test_phase5k_operational_narrow_two_way_detects_usable_passing_bay_markers()
     assert report["narrow_two_way_risks"]["passing_bays"][0]["associated_aisle_id"] == "A-MAIN"
     assert report["narrow_two_way_risks"]["passing_bays"][0]["geometry_source"] == "center_width_length"
     assert report["narrow_two_way_risks"]["passing_bay_spacing"][0]["projected_passing_bays"][0]["position_along_aisle"] == 12.0
+    assert [gap["segment_type"] for gap in report["narrow_two_way_risks"]["passing_bay_spacing"][0]["gaps"]] == [
+        "endpoint_to_passing_bay",
+        "endpoint_to_passing_bay",
+    ]
     assert report["narrow_two_way_risks"]["aisle_issues"][0]["issue"] == "narrow_two_way_passing_bay_spacing_checked"
     assert report["narrow_two_way_risks"]["stall_issues"][0]["issue"] == "stall_served_by_narrow_two_way_aisle_pending_passing_bay_spacing_check"
     assert report["narrow_two_way_summary_risks"] == []
 
 
-def test_phase5k_operational_passing_bay_shortage_can_gate_promotion():
+def test_phase5l_operational_passing_bay_shortage_can_gate_promotion():
     layout = _narrow_two_way_layout(
         {
             "operational_quality_mode": "promotion_gate",
@@ -382,7 +394,7 @@ def test_phase5k_operational_passing_bay_shortage_can_gate_promotion():
     assert conflict["passing_bay_shortage_count"] == 2
 
 
-def test_phase5k_operational_passing_bay_geometry_issue_can_gate_promotion():
+def test_phase5l_operational_passing_bay_geometry_issue_can_gate_promotion():
     layout = _narrow_two_way_layout(
         {
             "operational_quality_mode": "promotion_gate",
@@ -414,7 +426,7 @@ def test_phase5k_operational_passing_bay_geometry_issue_can_gate_promotion():
     assert conflict["issues"] == ["passing_bay_not_adjacent_to_aisle"]
 
 
-def test_phase5k_operational_passing_bay_spacing_can_gate_promotion():
+def test_phase5l_operational_passing_bay_spacing_can_gate_promotion():
     layout = _narrow_two_way_layout(
         {
             "operational_quality_mode": "promotion_gate",
@@ -438,16 +450,22 @@ def test_phase5k_operational_passing_bay_spacing_can_gate_promotion():
 
     assert report["narrow_two_way_risk_score"] == 1.0
     assert report["narrow_two_way_summary"]["passing_bay_spacing_issue_count"] == 1
+    assert report["narrow_two_way_summary"]["passing_bay_spacing_exceeded_gap_count"] == 1
     spacing = report["narrow_two_way_risks"]["passing_bay_spacing"][0]
     assert spacing["issue"] == "passing_bay_spacing_exceeds_limit"
+    assert spacing["exceeded_gap_count"] == 1
     assert spacing["longest_unserved_gap"] == 12.0
+    assert spacing["longest_unserved_gap_type"] == "endpoint_to_passing_bay"
+    assert [gap["exceeds_limit"] for gap in spacing["gaps"]] == [True, False]
     conflict = next(item for item in report["blocking_conflicts"] if item["source_type"] == "passing_bay_spacing")
     assert conflict["aisle_id"] == "A-MAIN"
+    assert conflict["exceeded_gap_count"] == 1
     assert conflict["longest_unserved_gap"] == 12.0
+    assert conflict["longest_unserved_gap_type"] == "endpoint_to_passing_bay"
     assert conflict["max_passing_bay_spacing"] == 10.0
 
 
-def test_phase5k_operational_narrow_two_way_issue_can_gate_promotion():
+def test_phase5l_operational_narrow_two_way_issue_can_gate_promotion():
     layout = _narrow_two_way_layout(
         {
             "operational_quality_mode": "promotion_gate",
@@ -465,7 +483,7 @@ def test_phase5k_operational_narrow_two_way_issue_can_gate_promotion():
     assert conflict["issue"] == "stall_served_by_narrow_two_way_aisle_without_passing_bay_model"
 
 
-def test_phase5k_operational_narrow_two_way_stall_ratio_can_gate_promotion():
+def test_phase5l_operational_narrow_two_way_stall_ratio_can_gate_promotion():
     layout = _narrow_two_way_layout(
         {
             "operational_quality_mode": "promotion_gate",
