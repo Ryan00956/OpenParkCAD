@@ -15,11 +15,19 @@ def operational_quality_report(layout: LayoutResult) -> dict[str, Any]:
     entrance_throats = _entrance_throat_reports(layout)
     route_risks = _route_risk_reports(layout)
     directionality_risks = _directionality_risk_reports(layout)
+    narrow_two_way_risks = _narrow_two_way_risk_reports(layout)
     junction_conflicts = sum(len(item["conflicting_stalls"]) for item in junctions)
     entrance_conflicts = sum(len(item["conflicting_stalls"]) for item in entrance_throats)
     route_risk_score = float(route_risks["risk_score"])
     directionality_risk_score = float(directionality_risks["risk_score"])
-    risk_score = float(junction_conflicts + entrance_conflicts + route_risk_score + directionality_risk_score)
+    narrow_two_way_risk_score = float(narrow_two_way_risks["risk_score"])
+    risk_score = float(
+        junction_conflicts
+        + entrance_conflicts
+        + route_risk_score
+        + directionality_risk_score
+        + narrow_two_way_risk_score
+    )
     mode = _operational_quality_mode(layout.site)
     max_allowed_risk_score = _max_allowed_risk_score(layout.site)
     risk_exceeds_limit = (
@@ -27,7 +35,7 @@ def operational_quality_report(layout: LayoutResult) -> dict[str, Any]:
         and risk_score > max_allowed_risk_score + 1e-9
     )
     blocking_conflicts = (
-        _blocking_conflicts(junctions, entrance_throats, route_risks, directionality_risks)
+        _blocking_conflicts(junctions, entrance_throats, route_risks, directionality_risks, narrow_two_way_risks)
         if mode in {"promotion_gate", "hard_reject"} and risk_exceeds_limit
         else []
     )
@@ -50,8 +58,10 @@ def operational_quality_report(layout: LayoutResult) -> dict[str, Any]:
         warnings.append(f"{route_risk_score:g} route-level operational risk score is reported")
     if directionality_risk_score:
         warnings.append(f"{directionality_risk_score:g} directionality operational risk score is reported")
+    if narrow_two_way_risk_score:
+        warnings.append(f"{narrow_two_way_risk_score:g} narrow two-way operational risk score is reported")
     return {
-        "version": "phase5g-1",
+        "version": "phase5h-1",
         "status": "active_failed" if not valid else "report_only",
         "mode": mode,
         "valid": valid,
@@ -72,11 +82,16 @@ def operational_quality_report(layout: LayoutResult) -> dict[str, Any]:
         "directionality_risk_count": directionality_risks["risk_count"],
         "directionality_summary": directionality_risks["summary"],
         "directionality_summary_risks": directionality_risks["summary_risks"],
+        "narrow_two_way_risk_score": narrow_two_way_risk_score,
+        "narrow_two_way_risk_count": narrow_two_way_risks["risk_count"],
+        "narrow_two_way_summary": narrow_two_way_risks["summary"],
+        "narrow_two_way_summary_risks": narrow_two_way_risks["summary_risks"],
         "warnings": warnings,
         "junctions": junctions,
         "entrance_throats": entrance_throats,
         "route_risks": route_risks,
         "directionality_risks": directionality_risks,
+        "narrow_two_way_risks": narrow_two_way_risks,
     }
 
 
@@ -377,6 +392,133 @@ def _directionality_risk_reports(layout: LayoutResult) -> dict[str, Any]:
     }
 
 
+def _narrow_two_way_risk_reports(layout: LayoutResult) -> dict[str, Any]:
+    aisle_class = _selected_aisle_class(layout.site)
+    issue_risk = _nonnegative_float(
+        layout.site.optimization.get("operational_narrow_two_way_issue_risk", 0.0),
+        0.0,
+    )
+    max_stall_ratio = _optional_ratio(layout.site.optimization.get("operational_max_narrow_two_way_stall_ratio"))
+    stall_ratio_risk = _nonnegative_float(
+        layout.site.optimization.get("operational_narrow_two_way_stall_ratio_risk", 1.0),
+        1.0,
+    )
+    if not _is_narrow_two_way_class(aisle_class):
+        summary = _narrow_two_way_summary([], [], len(layout.stalls), aisle_class)
+        return {
+            "version": "phase5h-1",
+            "status": "not_applicable",
+            "risk_count": 0,
+            "risk_score": 0.0,
+            "stall_issue_risk_score": 0.0,
+            "summary_risk_score": 0.0,
+            "narrow_two_way_issue_risk": issue_risk,
+            "max_narrow_two_way_stall_ratio": max_stall_ratio,
+            "narrow_two_way_stall_ratio_risk": stall_ratio_risk,
+            "selected_aisle_class": _aisle_class_report(aisle_class),
+            "passing_bay_model_available": False,
+            "summary": summary,
+            "summary_risks": [],
+            "aisle_issues": [],
+            "stall_issues": [],
+        }
+
+    aisle_issues = [
+        {
+            "aisle_id": aisle.id,
+            "role": aisle.role,
+            "issue": "narrow_two_way_without_passing_bay_model",
+            "passing_bay_model_available": False,
+        }
+        for aisle in layout.aisles
+        if aisle.role != "turnaround"
+    ]
+    narrow_aisle_ids = {item["aisle_id"] for item in aisle_issues}
+    stall_issues = [
+        {
+            "stall_id": stall.id,
+            "aisle_id": stall.served_by_aisle_id,
+            "issue": "stall_served_by_narrow_two_way_aisle_without_passing_bay_model",
+            "risk_score": float(issue_risk),
+        }
+        for stall in layout.stalls
+        if stall.served_by_aisle_id in narrow_aisle_ids
+    ]
+    stall_issue_risk_score = sum(float(item["risk_score"]) for item in stall_issues)
+    summary = _narrow_two_way_summary(aisle_issues, stall_issues, len(layout.stalls), aisle_class)
+    summary_risks = _narrow_two_way_summary_risks(summary, max_stall_ratio, stall_ratio_risk)
+    summary_risk_score = sum(float(item["risk_score"]) for item in summary_risks)
+    return {
+        "version": "phase5h-1",
+        "status": "active",
+        "risk_count": len([item for item in stall_issues if float(item["risk_score"]) > 0]) + len(summary_risks),
+        "risk_score": float(stall_issue_risk_score + summary_risk_score),
+        "stall_issue_risk_score": float(stall_issue_risk_score),
+        "summary_risk_score": float(summary_risk_score),
+        "narrow_two_way_issue_risk": issue_risk,
+        "max_narrow_two_way_stall_ratio": max_stall_ratio,
+        "narrow_two_way_stall_ratio_risk": stall_ratio_risk,
+        "selected_aisle_class": _aisle_class_report(aisle_class),
+        "passing_bay_model_available": False,
+        "summary": summary,
+        "summary_risks": summary_risks,
+        "aisle_issues": aisle_issues,
+        "stall_issues": stall_issues,
+    }
+
+
+def _narrow_two_way_summary(
+    aisle_issues: list[dict[str, Any]],
+    stall_issues: list[dict[str, Any]],
+    checked_stall_count: int,
+    aisle_class,
+) -> dict[str, Any]:
+    affected_stall_count = len(stall_issues)
+    return {
+        "selected_aisle_class": _aisle_class_report(aisle_class),
+        "is_narrow_two_way": _is_narrow_two_way_class(aisle_class),
+        "passing_bay_model_available": False,
+        "narrow_two_way_aisle_count": len(aisle_issues),
+        "affected_stall_count": affected_stall_count,
+        "checked_stall_count": checked_stall_count,
+        "affected_stall_ratio": (
+            float(affected_stall_count / checked_stall_count)
+            if checked_stall_count
+            else 0.0
+        ),
+        "issue": (
+            "narrow_two_way_without_passing_bay_model"
+            if aisle_issues
+            else None
+        ),
+    }
+
+
+def _narrow_two_way_summary_risks(
+    summary: dict[str, Any],
+    max_stall_ratio: float | None,
+    stall_ratio_risk: float,
+) -> list[dict[str, Any]]:
+    ratio = summary.get("affected_stall_ratio")
+    if (
+        max_stall_ratio is not None
+        and isinstance(ratio, int | float)
+        and float(ratio) > max_stall_ratio + 1e-9
+    ):
+        return [
+            {
+                "id": "OQ-NARROW-TWO-WAY-STALL-RATIO",
+                "issue": "narrow_two_way_stall_ratio_exceeds_limit",
+                "affected_stall_ratio": float(ratio),
+                "max_narrow_two_way_stall_ratio": max_stall_ratio,
+                "affected_stall_count": summary["affected_stall_count"],
+                "checked_stall_count": summary["checked_stall_count"],
+                "risk_score": float(stall_ratio_risk),
+            }
+        ]
+    return []
+
+
 def _directionality_node_issues(graph, reachable_from_entries: set[str], can_reach_exits: set[str]) -> list[dict[str, Any]]:
     issues: list[dict[str, Any]] = []
     for node in graph.nodes:
@@ -478,6 +620,38 @@ def _issue_counts(items: list[dict[str, Any]]) -> dict[str, int]:
             continue
         counts[str(issue)] = counts.get(str(issue), 0) + 1
     return counts
+
+
+def _selected_aisle_class(site: SiteSpec):
+    if site.fixed_aisle_class:
+        for aisle_class in site.aisle_classes:
+            if aisle_class.id == site.fixed_aisle_class:
+                return aisle_class
+    for aisle_class in site.aisle_classes:
+        if aisle_class.enabled:
+            return aisle_class
+    return None
+
+
+def _is_narrow_two_way_class(aisle_class) -> bool:
+    return bool(
+        aisle_class
+        and aisle_class.capacity == "single_vehicle"
+        and aisle_class.directionality == "two_way"
+    )
+
+
+def _aisle_class_report(aisle_class) -> dict[str, Any] | None:
+    if aisle_class is None:
+        return None
+    return {
+        "id": aisle_class.id,
+        "width": aisle_class.width,
+        "capacity": aisle_class.capacity,
+        "directionality": aisle_class.directionality,
+        "centerline_crossing": aisle_class.centerline_crossing,
+        "enabled": aisle_class.enabled,
+    }
 
 
 def _route_summary(routes: list[dict[str, Any]]) -> dict[str, Any]:
@@ -732,6 +906,7 @@ def _blocking_conflicts(
     entrance_throats: list[dict[str, Any]],
     route_risks: dict[str, Any],
     directionality_risks: dict[str, Any],
+    narrow_two_way_risks: dict[str, Any],
 ) -> list[dict[str, Any]]:
     conflicts: list[dict[str, Any]] = []
     for junction in junctions:
@@ -768,6 +943,8 @@ def _blocking_conflicts(
         conflicts.append(summary_risk)
     for directionality in _directionality_conflicts(directionality_risks):
         conflicts.append(directionality)
+    for narrow_two_way in _narrow_two_way_conflicts(narrow_two_way_risks):
+        conflicts.append(narrow_two_way)
     return conflicts
 
 
@@ -865,6 +1042,43 @@ def _directionality_conflicts(directionality_risks: dict[str, Any]) -> list[dict
                     "stall_issue_ratio": item["stall_issue_ratio"],
                     "max_directionality_issue_ratio": item["max_directionality_issue_ratio"],
                     "stall_issue_count": item["stall_issue_count"],
+                    "checked_stall_count": item["checked_stall_count"],
+                    "risk_score": item["risk_score"],
+                }
+            )
+    return conflicts
+
+
+def _narrow_two_way_conflicts(narrow_two_way_risks: dict[str, Any]) -> list[dict[str, Any]]:
+    conflicts = []
+    raw_stalls = narrow_two_way_risks.get("stall_issues", [])
+    if isinstance(raw_stalls, list):
+        for item in raw_stalls:
+            if not isinstance(item, dict) or float(item.get("risk_score", 0.0)) <= 0:
+                continue
+            conflicts.append(
+                {
+                    "source_type": "narrow_two_way_stall",
+                    "source_id": f"OQ-NARROW-TWO-WAY-{item['stall_id']}",
+                    "stall_id": item["stall_id"],
+                    "aisle_id": item["aisle_id"],
+                    "issue": item["issue"],
+                    "risk_score": item["risk_score"],
+                }
+            )
+    raw_summary = narrow_two_way_risks.get("summary_risks", [])
+    if isinstance(raw_summary, list):
+        for item in raw_summary:
+            if not isinstance(item, dict):
+                continue
+            conflicts.append(
+                {
+                    "source_type": "narrow_two_way_summary",
+                    "source_id": item["id"],
+                    "issue": item["issue"],
+                    "affected_stall_ratio": item["affected_stall_ratio"],
+                    "max_narrow_two_way_stall_ratio": item["max_narrow_two_way_stall_ratio"],
+                    "affected_stall_count": item["affected_stall_count"],
                     "checked_stall_count": item["checked_stall_count"],
                     "risk_score": item["risk_score"],
                 }

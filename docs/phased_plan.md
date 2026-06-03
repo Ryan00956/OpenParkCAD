@@ -1143,6 +1143,32 @@ Current rules:
 - This is not narrow two-way head-to-head detection yet. It is the first
   directed-graph circulation trap check.
 
+### Phase 5H: Narrow Two-Way Exposure Report
+
+Operational quality now recognizes layouts that use a single-vehicle,
+two-way aisle class before the generator is allowed to optimize narrow
+two-way aisles freely.
+
+Current rules:
+
+- The checker reads the selected aisle class from `aisles.fixed_class` or the
+  first enabled aisle class.
+- An aisle class with `capacity = "single_vehicle"` and
+  `directionality = "two_way"` is treated as narrow two-way.
+- Because passing bay geometry is not implemented yet, narrow two-way aisles
+  are reported with `narrow_two_way_without_passing_bay_model`.
+- Stalls served by those aisles are reported as affected stalls.
+- `optimization.operational_narrow_two_way_issue_risk` can assign risk per
+  affected stall. It defaults to zero, so manually modeled narrow two-way
+  layouts remain diagnostic unless configured.
+- `optimization.operational_max_narrow_two_way_stall_ratio` can gate on the
+  share of stalls served by narrow two-way aisles.
+- `optimization.operational_narrow_two_way_stall_ratio_risk` controls the risk
+  score for that ratio gate and defaults to 1.0.
+- This is still not head-to-head deadlock simulation. It is a conservative
+  exposure report that prevents narrow two-way support from silently looking
+  safe before passing bays and conflict rules exist.
+
 ## Implementation Principle
 
 Keep these layers separate in code:

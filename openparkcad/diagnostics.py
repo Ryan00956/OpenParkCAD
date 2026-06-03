@@ -60,7 +60,7 @@ def build_input_diagnostics(site: SiteSpec, layout: LayoutResult | None = None) 
         warnings.append("optimization weights are active for Phase 1 scoring; candidate generation is still deliberately narrow")
     if layout and layout.operational_quality:
         mode = layout.operational_quality.get("mode", "score_only")
-        warnings.append(f"operational quality checks are active in {mode} mode for Phase 5G")
+        warnings.append(f"operational quality checks are active in {mode} mode for Phase 5H")
     unsupported = phase1_unsupported_inputs(site)
     warnings.extend(f"{item['field']} unsupported in Phase 1: {item['reason']}" for item in unsupported)
 
@@ -259,7 +259,7 @@ def _constraint_status(site: SiteSpec, layout: LayoutResult | None) -> list[dict
             "constraint": "operational quality risk report",
             "status": _operational_quality_status(layout),
             "note": (
-                "Phase 5G reports junction, entrance-throat, route, route-summary, and directionality risks; configured modes can score, gate promotion, or hard-reject risky layouts."
+                "Phase 5H reports junction, entrance-throat, route, route-summary, directionality, and narrow two-way exposure risks; configured modes can score, gate promotion, or hard-reject risky layouts."
                 if _operational_quality_status(layout) == "active"
                 else "Operational quality checks are only available after layout generation."
             ),
@@ -332,6 +332,7 @@ def _field_support(site: SiteSpec, layout: LayoutResult | None) -> dict[str, str
         "constraints.operational_route_risk": _operational_quality_status(layout),
         "constraints.operational_route_summary": _operational_quality_status(layout),
         "constraints.operational_directionality_risk": _operational_quality_status(layout),
+        "constraints.operational_narrow_two_way_risk": _operational_quality_status(layout),
         "constraints.turning_radius": "future",
         "constraints.swept_path": "future",
         "optimization.weights": "parsed_not_enforced" if site.optimization else "future",
@@ -357,6 +358,9 @@ def _field_support(site: SiteSpec, layout: LayoutResult | None) -> dict[str, str
         "optimization.operational_directionality_issue_risk": "available" if layout else "future",
         "optimization.operational_max_directionality_issue_ratio": "available" if layout else "future",
         "optimization.operational_directionality_issue_ratio_risk": "available" if layout else "future",
+        "optimization.operational_narrow_two_way_issue_risk": "available" if layout else "future",
+        "optimization.operational_max_narrow_two_way_stall_ratio": "available" if layout else "future",
+        "optimization.operational_narrow_two_way_stall_ratio_risk": "available" if layout else "future",
         "optimization.candidate_layout_preview": "active" if layout and layout.candidate_layout_preview else "future",
         "optimization.candidate_layout_preview_scoring": "active" if _layout_preview_comparison(layout) else "future",
         "optimization.promote_candidate_layout_preview": _candidate_layout_promotion_status(layout),

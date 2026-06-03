@@ -144,10 +144,60 @@ def _directional_trap_layout(optimization: dict | None = None) -> LayoutResult:
     )
 
 
-def test_phase5g_operational_quality_reports_junction_stall_conflicts():
+def _narrow_two_way_layout(optimization: dict | None = None) -> LayoutResult:
+    site = SiteSpec(
+        name="narrow-two-way",
+        boundary=[(0, 0), (30, 0), (30, 18), (0, 18)],
+        stall=StallSpec(width=2.5, length=5.0, allowed_angles=(90.0,)),
+        aisle_width=3.5,
+        margin=0.0,
+        entrances=[
+            EntranceSpec(
+                id="main",
+                mode="shared",
+                center=(0, 7),
+                width=4.0,
+                heading_degrees=0.0,
+            )
+        ],
+        aisle_classes=[
+            AisleClassSpec(
+                id="narrow-two-way",
+                width=3.5,
+                capacity="single_vehicle",
+                directionality="two_way",
+            )
+        ],
+        fixed_aisle_class="narrow-two-way",
+        optimization=optimization or {},
+    )
+    return LayoutResult(
+        site=site,
+        aisles=[
+            ParkingAisle(
+                id="A-MAIN",
+                polygon=[(0, 4), (20, 4), (20, 7.5), (0, 7.5)],
+                angle_degrees=0.0,
+                role="main",
+                connected_to_entrance_id="main",
+            )
+        ],
+        stalls=[
+            ParkingStall(
+                id="P-NARROW-001",
+                polygon=[(8, 7.5), (10.5, 7.5), (10.5, 12.5), (8, 12.5)],
+                angle_degrees=90.0,
+                served_by_aisle_id="A-MAIN",
+                aisle_side="left",
+            )
+        ],
+    )
+
+
+def test_phase5h_operational_quality_reports_junction_stall_conflicts():
     report = operational_quality_report(_quality_layout())
 
-    assert report["version"] == "phase5g-1"
+    assert report["version"] == "phase5h-1"
     assert report["status"] == "report_only"
     assert report["mode"] == "score_only"
     assert report["valid"] is True
@@ -156,8 +206,10 @@ def test_phase5g_operational_quality_reports_junction_stall_conflicts():
     assert report["risk_score"] == 1.0
     assert report["route_risk_score"] == 0.0
     assert report["directionality_risk_score"] == 0.0
+    assert report["narrow_two_way_risk_score"] == 0.0
     assert report["route_summary"]["checked_stall_count"] == 0
     assert report["directionality_summary"]["checked_stall_count"] == 1
+    assert report["narrow_two_way_summary"]["is_narrow_two_way"] is False
     assert report["route_summary_risks"] == []
     assert report["promotion_blockers"] == []
     assert report["blocking_conflicts"] == []
@@ -244,6 +296,57 @@ def test_phase5g_operational_directionality_issue_ratio_can_gate_promotion():
     assert report["directionality_summary_risks"][0]["issue"] == "directionality_stall_issue_ratio_exceeds_limit"
     conflict = next(item for item in report["blocking_conflicts"] if item["source_type"] == "directionality_summary")
     assert conflict["stall_issue_ratio"] == 1.0
+
+
+def test_phase5h_operational_narrow_two_way_reports_without_default_penalty():
+    report = operational_quality_report(_narrow_two_way_layout())
+
+    assert report["narrow_two_way_risks"]["status"] == "active"
+    assert report["narrow_two_way_risks"]["version"] == "phase5h-1"
+    assert report["narrow_two_way_risk_score"] == 0.0
+    assert report["narrow_two_way_summary"]["is_narrow_two_way"] is True
+    assert report["narrow_two_way_summary"]["narrow_two_way_aisle_count"] == 1
+    assert report["narrow_two_way_summary"]["affected_stall_count"] == 1
+    assert report["narrow_two_way_summary"]["affected_stall_ratio"] == 1.0
+    assert report["narrow_two_way_summary"]["passing_bay_model_available"] is False
+    assert report["narrow_two_way_risks"]["aisle_issues"][0]["issue"] == "narrow_two_way_without_passing_bay_model"
+    assert report["narrow_two_way_risks"]["stall_issues"][0]["issue"] == "stall_served_by_narrow_two_way_aisle_without_passing_bay_model"
+    assert report["narrow_two_way_summary_risks"] == []
+
+
+def test_phase5h_operational_narrow_two_way_issue_can_gate_promotion():
+    layout = _narrow_two_way_layout(
+        {
+            "operational_quality_mode": "promotion_gate",
+            "operational_max_risk_score": 0,
+            "operational_narrow_two_way_issue_risk": 1,
+        }
+    )
+
+    report = operational_quality_report(layout)
+
+    assert report["narrow_two_way_risk_score"] == 1.0
+    assert report["promotion_blockers"] == ["operational_quality_risk_exceeds_limit"]
+    conflict = next(item for item in report["blocking_conflicts"] if item["source_type"] == "narrow_two_way_stall")
+    assert conflict["stall_id"] == "P-NARROW-001"
+    assert conflict["issue"] == "stall_served_by_narrow_two_way_aisle_without_passing_bay_model"
+
+
+def test_phase5h_operational_narrow_two_way_stall_ratio_can_gate_promotion():
+    layout = _narrow_two_way_layout(
+        {
+            "operational_quality_mode": "promotion_gate",
+            "operational_max_risk_score": 0,
+            "operational_max_narrow_two_way_stall_ratio": 0.5,
+        }
+    )
+
+    report = operational_quality_report(layout)
+
+    assert report["narrow_two_way_risk_score"] == 1.0
+    assert report["narrow_two_way_summary_risks"][0]["issue"] == "narrow_two_way_stall_ratio_exceeds_limit"
+    conflict = next(item for item in report["blocking_conflicts"] if item["source_type"] == "narrow_two_way_summary")
+    assert conflict["affected_stall_ratio"] == 1.0
 
 
 def test_phase5g_operational_route_risk_can_gate_promotion():

@@ -991,7 +991,10 @@ optimization operational_long_route_ratio_risk active for Phase 5F long-route ra
 optimization operational_directionality_issue_risk active for Phase 5G per-stall directionality risk
 optimization operational_max_directionality_issue_ratio active for Phase 5G directionality issue ratio threshold
 optimization operational_directionality_issue_ratio_risk active for Phase 5G directionality ratio risk score
-optimization weights.operational_risk active for Phase 5G soft-risk scoring
+optimization operational_narrow_two_way_issue_risk active for Phase 5H per-stall narrow two-way exposure risk
+optimization operational_max_narrow_two_way_stall_ratio active for Phase 5H narrow two-way stall ratio threshold
+optimization operational_narrow_two_way_stall_ratio_risk active for Phase 5H narrow two-way ratio risk score
+optimization weights.operational_risk active for Phase 5H soft-risk scoring
 optimization weights                    active for Phase 1 scoring
 optimization score breakdown            active in JSON report
 optimization promote_candidate_layout_preview active as guarded opt-in
@@ -1001,7 +1004,7 @@ report selected_connectors              active, includes removed and added stall
 report traffic_graph validation          active in JSON report
 report maneuver_validation              active in JSON report
 report maneuver_validation rule_counts  active in JSON report
-report operational_quality              active as Phase 5G local, route, summary, and directionality risk report
+report operational_quality              active as Phase 5H local, route, summary, directionality, and narrow two-way risk report
 report selected_stall_type_id           active in JSON report
 report stall_type_attempts              active in JSON report
 report selected_stall_assignment        active in JSON report
