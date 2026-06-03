@@ -68,7 +68,7 @@ def operational_quality_report(layout: LayoutResult) -> dict[str, Any]:
     if narrow_two_way_risk_score:
         warnings.append(f"{narrow_two_way_risk_score:g} narrow two-way operational risk score is reported")
     return {
-        "version": "phase5m-1",
+        "version": "phase5n-1",
         "status": "active_failed" if not valid else "report_only",
         "mode": mode,
         "valid": valid,
@@ -453,7 +453,7 @@ def _narrow_two_way_risk_reports(layout: LayoutResult) -> dict[str, Any]:
             min_passing_bays,
         )
         return {
-            "version": "phase5m-1",
+            "version": "phase5n-1",
             "status": "not_applicable",
             "risk_count": 0,
             "risk_score": 0.0,
@@ -497,6 +497,7 @@ def _narrow_two_way_risk_reports(layout: LayoutResult) -> dict[str, Any]:
         passing_bay_reports,
         max_passing_bay_spacing,
         passing_bay_spacing_risk,
+        layout.site,
     )
     meeting_risks = _narrow_two_way_meeting_risks(
         passing_bay_spacing_reports,
@@ -563,7 +564,7 @@ def _narrow_two_way_risk_reports(layout: LayoutResult) -> dict[str, Any]:
     )
     summary_risk_score = sum(float(item["risk_score"]) for item in summary_risks)
     return {
-        "version": "phase5m-1",
+        "version": "phase5n-1",
         "status": "active",
         "risk_count": (
             len([item for item in stall_issues if float(item["risk_score"]) > 0])
@@ -649,7 +650,8 @@ def _narrow_two_way_summary(
         "longest_passing_bay_gap_type": _longest_spacing_gap_type(passing_bay_spacing_reports, longest_spacing),
         "meeting_risk_count": len(meeting_risks),
         "full_aisle_meeting_risk_count": meeting_risk_counts.get("full_aisle_without_meeting_refuge", 0),
-        "endpoint_meeting_trap_count": meeting_risk_counts.get("endpoint_to_refuge_gap_exceeds_limit", 0),
+        "endpoint_meeting_trap_count": _endpoint_meeting_risk_count(meeting_risk_counts),
+        "entrance_meeting_trap_count": _entrance_meeting_risk_count(meeting_risk_counts),
         "mid_segment_meeting_risk_count": meeting_risk_counts.get("refuge_to_refuge_gap_exceeds_limit", 0),
         "meeting_risk_counts": meeting_risk_counts,
         "min_passing_bays": min_passing_bays,
@@ -911,6 +913,7 @@ def _passing_bay_spacing_reports(
     passing_bay_reports: list[dict[str, Any]],
     max_spacing: float | None,
     spacing_risk: float,
+    site: SiteSpec,
 ) -> list[dict[str, Any]]:
     reports: list[dict[str, Any]] = []
     usable_by_aisle: dict[str, list[dict[str, Any]]] = {}
@@ -942,7 +945,7 @@ def _passing_bay_spacing_reports(
             continue
         assigned = usable_by_aisle.get(aisle.id, [])
         projected = _project_passing_bays(axis, assigned)
-        anchors = _passing_bay_spacing_anchors(axis.length, projected)
+        anchors = _passing_bay_spacing_anchors(axis, aisle, projected, site)
         gaps = _passing_bay_spacing_gaps(anchors, max_spacing)
         longest_gap = max((gap["length"] for gap in gaps), default=float(axis.length))
         exceeded_gap_count = sum(1 for gap in gaps if gap["exceeds_limit"])
@@ -999,8 +1002,13 @@ def _narrow_two_way_meeting_risks(
                     "length": gap["length"],
                     "start_kind": gap["start_kind"],
                     "start_id": gap["start_id"],
+                    "start_network_kind": gap["start_network_kind"],
+                    "start_network_id": gap["start_network_id"],
                     "end_kind": gap["end_kind"],
                     "end_id": gap["end_id"],
+                    "end_network_kind": gap["end_network_kind"],
+                    "end_network_id": gap["end_network_id"],
+                    "network_segment_type": gap["network_segment_type"],
                     "max_passing_bay_spacing": spacing.get("max_passing_bay_spacing"),
                     "risk_score": float(meeting_gap_risk),
                 }
@@ -1010,39 +1018,77 @@ def _narrow_two_way_meeting_risks(
 
 
 def _meeting_issue_for_gap(gap: dict[str, Any]) -> str:
+    network_segment_type = gap.get("network_segment_type")
+    if network_segment_type == "entrance_to_terminal":
+        return "entrance_to_terminal_without_meeting_refuge"
+    if network_segment_type == "entrance_to_refuge":
+        return "entrance_to_refuge_gap_exceeds_limit"
+    if network_segment_type == "terminal_to_refuge":
+        return "terminal_to_refuge_gap_exceeds_limit"
     segment_type = gap.get("segment_type")
     if segment_type == "no_passing_bay_full_aisle":
         return "full_aisle_without_meeting_refuge"
-    if segment_type == "endpoint_to_passing_bay":
-        return "endpoint_to_refuge_gap_exceeds_limit"
     return "refuge_to_refuge_gap_exceeds_limit"
 
 
-def _passing_bay_spacing_anchors(axis_length: float, projected: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _passing_bay_spacing_anchors(
+    axis,
+    aisle: ParkingAisle,
+    projected: list[dict[str, Any]],
+    site: SiteSpec,
+) -> list[dict[str, Any]]:
+    endpoint_context = _aisle_endpoint_context(axis, aisle, site)
     anchors = [
         {
             "kind": "aisle_endpoint",
             "id": "start",
             "position_along_aisle": 0.0,
+            **endpoint_context["start"],
         },
         *[
             {
                 "kind": "passing_bay",
                 "id": item["passing_bay_id"],
                 "position_along_aisle": float(item["position_along_aisle"]),
+                "network_kind": "passing_bay_refuge",
+                "network_id": item["passing_bay_id"],
             }
             for item in projected
         ],
         {
             "kind": "aisle_endpoint",
             "id": "end",
-            "position_along_aisle": float(axis_length),
+            "position_along_aisle": float(axis.length),
+            **endpoint_context["end"],
         },
     ]
     deduped: dict[tuple[str, str], dict[str, Any]] = {}
     for anchor in anchors:
         deduped[(anchor["kind"], anchor["id"])] = anchor
     return sorted(deduped.values(), key=lambda item: item["position_along_aisle"])
+
+
+def _aisle_endpoint_context(axis, aisle: ParkingAisle, site: SiteSpec) -> dict[str, dict[str, Any]]:
+    context = {
+        "start": {
+            "network_kind": "aisle_terminal",
+            "network_id": aisle.id,
+        },
+        "end": {
+            "network_kind": "aisle_terminal",
+            "network_id": aisle.id,
+        },
+    }
+    if aisle.connected_to_entrance_id:
+        entrance = next((item for item in site.entrances if item.id == aisle.connected_to_entrance_id), None)
+        if entrance is not None:
+            entrance_position = float(axis.project(ShapelyPoint(entrance.center)))
+            endpoint_key = "start" if entrance_position <= axis.length / 2 else "end"
+            context[endpoint_key] = {
+                "network_kind": "entrance_throat",
+                "network_id": entrance.id,
+            }
+    return context
 
 
 def _passing_bay_spacing_gaps(
@@ -1061,9 +1107,14 @@ def _passing_bay_spacing_gaps(
                 "length": length,
                 "start_kind": left["kind"],
                 "start_id": left["id"],
+                "start_network_kind": left["network_kind"],
+                "start_network_id": left["network_id"],
                 "end_kind": right["kind"],
                 "end_id": right["id"],
+                "end_network_kind": right["network_kind"],
+                "end_network_id": right["network_id"],
                 "segment_type": segment_type,
+                "network_segment_type": _passing_bay_gap_network_type(left, right),
                 "exceeds_limit": exceeds_limit,
                 "issue": "passing_bay_gap_exceeds_limit" if exceeds_limit else None,
             }
@@ -1077,6 +1128,19 @@ def _passing_bay_gap_type(left: dict[str, Any], right: dict[str, Any]) -> str:
     if left["kind"] == "aisle_endpoint" or right["kind"] == "aisle_endpoint":
         return "endpoint_to_passing_bay"
     return "passing_bay_to_passing_bay"
+
+
+def _passing_bay_gap_network_type(left: dict[str, Any], right: dict[str, Any]) -> str:
+    kinds = {left["network_kind"], right["network_kind"]}
+    if kinds == {"aisle_terminal"}:
+        return "terminal_to_terminal"
+    if "entrance_throat" in kinds and "passing_bay_refuge" in kinds:
+        return "entrance_to_refuge"
+    if "entrance_throat" in kinds and "aisle_terminal" in kinds:
+        return "entrance_to_terminal"
+    if "aisle_terminal" in kinds and "passing_bay_refuge" in kinds:
+        return "terminal_to_refuge"
+    return "refuge_to_refuge"
 
 
 def _longest_gap_type(gaps: list[dict[str, Any]]) -> str | None:
@@ -1491,6 +1555,28 @@ def _longest_spacing_gap_type(reports: list[dict[str, Any]], longest_spacing: fl
     return None
 
 
+def _endpoint_meeting_risk_count(counts: dict[str, int]) -> int:
+    return sum(
+        counts.get(issue, 0)
+        for issue in (
+            "endpoint_to_refuge_gap_exceeds_limit",
+            "entrance_to_refuge_gap_exceeds_limit",
+            "terminal_to_refuge_gap_exceeds_limit",
+            "entrance_to_terminal_without_meeting_refuge",
+        )
+    )
+
+
+def _entrance_meeting_risk_count(counts: dict[str, int]) -> int:
+    return sum(
+        counts.get(issue, 0)
+        for issue in (
+            "entrance_to_refuge_gap_exceeds_limit",
+            "entrance_to_terminal_without_meeting_refuge",
+        )
+    )
+
+
 def _operational_quality_mode(site: SiteSpec) -> str:
     raw = site.optimization.get("operational_quality_mode", "score_only")
     mode = str(raw)
@@ -1713,8 +1799,13 @@ def _narrow_two_way_conflicts(narrow_two_way_risks: dict[str, Any]) -> list[dict
                     "aisle_id": item["aisle_id"],
                     "issue": item["issue"],
                     "segment_type": item["segment_type"],
+                    "network_segment_type": item["network_segment_type"],
                     "start": item["start"],
                     "end": item["end"],
+                    "start_network_kind": item["start_network_kind"],
+                    "start_network_id": item["start_network_id"],
+                    "end_network_kind": item["end_network_kind"],
+                    "end_network_id": item["end_network_id"],
                     "length": item["length"],
                     "max_passing_bay_spacing": item["max_passing_bay_spacing"],
                     "risk_score": item["risk_score"],

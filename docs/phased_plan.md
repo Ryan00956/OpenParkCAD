@@ -1288,6 +1288,32 @@ Current rules:
 - This is still a proxy. It does not simulate vehicle arrival order, priority,
   waiting behavior, or swept paths into and out of a passing bay.
 
+### Phase 5N: Network-Anchored Meeting Risk Proxy
+
+Meeting-risk segments now carry first-pass road-network anchor semantics.
+
+Current rules:
+
+- A generated aisle endpoint connected to `connected_to_entrance_id` is
+  classified as an `entrance_throat`.
+- Other generated aisle endpoints are classified as `aisle_terminal`.
+- Passing bay anchors are classified as `passing_bay_refuge`.
+- Gap reports include `start_network_kind`, `end_network_kind`, and
+  `network_segment_type`.
+- Network segment types currently include:
+  - `entrance_to_terminal`
+  - `entrance_to_refuge`
+  - `terminal_to_refuge`
+  - `refuge_to_refuge`
+  - `terminal_to_terminal`
+- Meeting risk issues are refined with those network semantics, so an
+  overlong entrance-side narrow segment can be reported as
+  `entrance_to_refuge_gap_exceeds_limit` or
+  `entrance_to_terminal_without_meeting_refuge`.
+- This still does not infer branch merge priority or multi-aisle route
+  conflicts. It only annotates the current aisle-axis gap proxy with known
+  entrance anchors.
+
 ## Implementation Principle
 
 Keep these layers separate in code:
