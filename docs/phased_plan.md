@@ -1076,6 +1076,24 @@ Current rules:
   risk still comes from the Phase 5C route issue rules and the existing
   operational-quality mode.
 
+### Phase 5E: Route Summary Threshold Risks
+
+The route summary can now become a design-level risk source when configured.
+
+Current rules:
+
+- `optimization.operational_max_turnaround_dependency_ratio` sets the maximum
+  allowed share of stalls whose serving aisle depends on a dead-end turnaround.
+- If omitted, the ratio is still reported but not penalized.
+- `optimization.operational_turnaround_dependency_ratio_risk` controls the risk
+  score added when the ratio exceeds the configured limit. It defaults to 1.0.
+- The risk is represented as a single `route_summary` blocker rather than one
+  blocker per stall, so reports stay readable on large sites.
+- The risk contributes to `operational_quality.risk_score`, so the existing
+  `score_only`, `promotion_gate`, and `hard_reject` modes apply.
+- This is not narrow two-way deadlock detection yet. It is a conservative
+  circulation-quality gate for excessive dependence on dead-end turnarounds.
+
 ## Implementation Principle
 
 Keep these layers separate in code:

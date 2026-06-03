@@ -88,10 +88,10 @@ def _route_layout(optimization: dict | None = None) -> LayoutResult:
     )
 
 
-def test_phase5d_operational_quality_reports_junction_stall_conflicts():
+def test_phase5e_operational_quality_reports_junction_stall_conflicts():
     report = operational_quality_report(_quality_layout())
 
-    assert report["version"] == "phase5d-1"
+    assert report["version"] == "phase5e-1"
     assert report["status"] == "report_only"
     assert report["mode"] == "score_only"
     assert report["valid"] is True
@@ -100,18 +100,22 @@ def test_phase5d_operational_quality_reports_junction_stall_conflicts():
     assert report["risk_score"] == 1.0
     assert report["route_risk_score"] == 0.0
     assert report["route_summary"]["checked_stall_count"] == 0
+    assert report["route_summary_risks"] == []
     assert report["promotion_blockers"] == []
     assert report["blocking_conflicts"] == []
     assert report["junctions"][0]["conflicting_stalls"][0]["stall_id"] == "P-001"
 
 
-def test_phase5d_operational_quality_reports_route_lengths_without_default_penalty():
+def test_phase5e_operational_quality_reports_route_lengths_without_default_penalty():
     report = operational_quality_report(_route_layout())
 
     assert report["route_risks"]["status"] == "active"
-    assert report["route_risks"]["version"] == "phase5d-1"
+    assert report["route_risks"]["version"] == "phase5e-1"
     assert report["route_risks"]["checked_stall_count"] == 1
     assert report["route_risk_score"] == 0.0
+    assert report["route_risks"]["stall_route_risk_score"] == 0.0
+    assert report["route_risks"]["summary_risk_score"] == 0.0
+    assert report["route_summary_risks"] == []
     summary = report["route_summary"]
     assert summary["checked_stall_count"] == 1
     assert summary["average_route_length"] == 20.0
@@ -131,7 +135,7 @@ def test_phase5d_operational_quality_reports_route_lengths_without_default_penal
     assert route["issues"] == []
 
 
-def test_phase5d_operational_route_risk_can_gate_promotion():
+def test_phase5e_operational_route_risk_can_gate_promotion():
     layout = _route_layout(
         {
             "operational_quality_mode": "promotion_gate",
@@ -152,7 +156,28 @@ def test_phase5d_operational_route_risk_can_gate_promotion():
     assert route_conflict["issues"] == ["route_length_exceeds_limit"]
 
 
-def test_phase5d_operational_quality_score_only_does_not_block_with_limit():
+def test_phase5e_operational_turnaround_dependency_ratio_can_gate_promotion():
+    layout = _route_layout(
+        {
+            "operational_quality_mode": "promotion_gate",
+            "operational_max_risk_score": 0,
+            "operational_max_turnaround_dependency_ratio": 0.5,
+        }
+    )
+
+    report = operational_quality_report(layout)
+
+    assert report["route_risk_score"] == 1.0
+    assert report["route_risks"]["stall_route_risk_score"] == 0.0
+    assert report["route_risks"]["summary_risk_score"] == 1.0
+    assert report["route_summary_risks"][0]["issue"] == "turnaround_dependency_ratio_exceeds_limit"
+    assert report["route_summary_risks"][0]["turnaround_dependency_ratio"] == 1.0
+    assert report["promotion_blockers"] == ["operational_quality_risk_exceeds_limit"]
+    summary_conflict = next(item for item in report["blocking_conflicts"] if item["source_type"] == "route_summary")
+    assert summary_conflict["issue"] == "turnaround_dependency_ratio_exceeds_limit"
+
+
+def test_phase5e_operational_quality_score_only_does_not_block_with_limit():
     site = SiteSpec(
         name="operational-score-only",
         boundary=[(0, 0), (24, 0), (24, 24), (0, 24)],
@@ -173,7 +198,7 @@ def test_phase5d_operational_quality_score_only_does_not_block_with_limit():
     assert report["blocking_conflicts"] == []
 
 
-def test_phase5d_operational_quality_promotion_gate_reports_blockers():
+def test_phase5e_operational_quality_promotion_gate_reports_blockers():
     site = SiteSpec(
         name="operational-gate",
         boundary=[(0, 0), (24, 0), (24, 24), (0, 24)],
@@ -194,7 +219,7 @@ def test_phase5d_operational_quality_promotion_gate_reports_blockers():
     assert report["blocking_conflicts"][0]["stall_id"] == "P-001"
 
 
-def test_phase5d_operational_quality_hard_reject_marks_layout_invalid():
+def test_phase5e_operational_quality_hard_reject_marks_layout_invalid():
     site = SiteSpec(
         name="operational-hard-reject",
         boundary=[(0, 0), (24, 0), (24, 24), (0, 24)],
@@ -214,7 +239,7 @@ def test_phase5d_operational_quality_hard_reject_marks_layout_invalid():
     assert report["promotion_blockers"] == ["operational_quality_risk_exceeds_limit"]
 
 
-def test_phase5d_operational_risk_penalty_is_scoreable():
+def test_phase5e_operational_risk_penalty_is_scoreable():
     site = SiteSpec(
         name="operational-risk-score",
         boundary=[(0, 0), (24, 0), (24, 24), (0, 24)],
