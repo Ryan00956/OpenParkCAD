@@ -68,7 +68,7 @@ def operational_quality_report(layout: LayoutResult) -> dict[str, Any]:
     if narrow_two_way_risk_score:
         warnings.append(f"{narrow_two_way_risk_score:g} narrow two-way operational risk score is reported")
     return {
-        "version": "phase5p-1",
+        "version": "phase5q-1",
         "status": "active_failed" if not valid else "report_only",
         "mode": mode,
         "valid": valid,
@@ -436,6 +436,10 @@ def _narrow_two_way_risk_reports(layout: LayoutResult) -> dict[str, Any]:
         layout.site.optimization.get("operational_narrow_two_way_meeting_gap_risk", 0.0),
         0.0,
     )
+    junction_merge_risk = _nonnegative_float(
+        layout.site.optimization.get("operational_narrow_two_way_junction_merge_risk", 0.0),
+        0.0,
+    )
     passing_bay_shortage_risk = _nonnegative_float(
         layout.site.optimization.get("operational_passing_bay_shortage_risk", 1.0),
         1.0,
@@ -450,10 +454,11 @@ def _narrow_two_way_risk_reports(layout: LayoutResult) -> dict[str, Any]:
             [],
             [],
             [],
+            [],
             min_passing_bays,
         )
         return {
-            "version": "phase5p-1",
+            "version": "phase5q-1",
             "status": "not_applicable",
             "risk_count": 0,
             "risk_score": 0.0,
@@ -461,6 +466,7 @@ def _narrow_two_way_risk_reports(layout: LayoutResult) -> dict[str, Any]:
             "passing_bay_issue_risk_score": 0.0,
             "passing_bay_spacing_risk_score": 0.0,
             "meeting_risk_score": 0.0,
+            "junction_merge_risk_score": 0.0,
             "summary_risk_score": 0.0,
             "narrow_two_way_issue_risk": issue_risk,
             "max_narrow_two_way_stall_ratio": max_stall_ratio,
@@ -471,6 +477,7 @@ def _narrow_two_way_risk_reports(layout: LayoutResult) -> dict[str, Any]:
             "max_passing_bay_spacing": max_passing_bay_spacing,
             "passing_bay_spacing_risk": passing_bay_spacing_risk,
             "meeting_gap_risk": meeting_gap_risk,
+            "junction_merge_risk": junction_merge_risk,
             "min_passing_bays": min_passing_bays,
             "passing_bay_shortage_risk": passing_bay_shortage_risk,
             "selected_aisle_class": _aisle_class_report(aisle_class),
@@ -478,6 +485,7 @@ def _narrow_two_way_risk_reports(layout: LayoutResult) -> dict[str, Any]:
             "passing_bays": passing_bays,
             "passing_bay_spacing": [],
             "meeting_risks": [],
+            "junction_merge_risks": [],
             "summary": summary,
             "summary_risks": [],
             "aisle_issues": [],
@@ -503,6 +511,10 @@ def _narrow_two_way_risk_reports(layout: LayoutResult) -> dict[str, Any]:
     meeting_risks = _narrow_two_way_meeting_risks(
         passing_bay_spacing_reports,
         meeting_gap_risk,
+    )
+    junction_merge_risks = _narrow_two_way_junction_merge_risks(
+        passing_bay_spacing_reports,
+        junction_merge_risk,
     )
     usable_passing_bay_count = sum(1 for item in passing_bay_reports if item["usable"])
     passing_bay_model_available = bool(passing_bay_reports)
@@ -546,6 +558,7 @@ def _narrow_two_way_risk_reports(layout: LayoutResult) -> dict[str, Any]:
     passing_bay_issue_risk_score = sum(float(item["risk_score"]) for item in passing_bay_reports)
     passing_bay_spacing_risk_score = sum(float(item["risk_score"]) for item in passing_bay_spacing_reports)
     meeting_risk_score = sum(float(item["risk_score"]) for item in meeting_risks)
+    junction_merge_risk_score = sum(float(item["risk_score"]) for item in junction_merge_risks)
     summary = _narrow_two_way_summary(
         aisle_issues,
         stall_issues,
@@ -555,6 +568,7 @@ def _narrow_two_way_risk_reports(layout: LayoutResult) -> dict[str, Any]:
         passing_bay_reports,
         passing_bay_spacing_reports,
         meeting_risks,
+        junction_merge_risks,
         min_passing_bays,
     )
     summary_risks = _narrow_two_way_summary_risks(
@@ -565,13 +579,14 @@ def _narrow_two_way_risk_reports(layout: LayoutResult) -> dict[str, Any]:
     )
     summary_risk_score = sum(float(item["risk_score"]) for item in summary_risks)
     return {
-        "version": "phase5p-1",
+        "version": "phase5q-1",
         "status": "active",
         "risk_count": (
             len([item for item in stall_issues if float(item["risk_score"]) > 0])
             + len([item for item in passing_bay_reports if float(item["risk_score"]) > 0])
             + len([item for item in passing_bay_spacing_reports if float(item["risk_score"]) > 0])
             + len([item for item in meeting_risks if float(item["risk_score"]) > 0])
+            + len([item for item in junction_merge_risks if float(item["risk_score"]) > 0])
             + len(summary_risks)
         ),
         "risk_score": float(
@@ -579,12 +594,14 @@ def _narrow_two_way_risk_reports(layout: LayoutResult) -> dict[str, Any]:
             + passing_bay_issue_risk_score
             + passing_bay_spacing_risk_score
             + meeting_risk_score
+            + junction_merge_risk_score
             + summary_risk_score
         ),
         "stall_issue_risk_score": float(stall_issue_risk_score),
         "passing_bay_issue_risk_score": float(passing_bay_issue_risk_score),
         "passing_bay_spacing_risk_score": float(passing_bay_spacing_risk_score),
         "meeting_risk_score": float(meeting_risk_score),
+        "junction_merge_risk_score": float(junction_merge_risk_score),
         "summary_risk_score": float(summary_risk_score),
         "narrow_two_way_issue_risk": issue_risk,
         "max_narrow_two_way_stall_ratio": max_stall_ratio,
@@ -595,6 +612,7 @@ def _narrow_two_way_risk_reports(layout: LayoutResult) -> dict[str, Any]:
         "max_passing_bay_spacing": max_passing_bay_spacing,
         "passing_bay_spacing_risk": passing_bay_spacing_risk,
         "meeting_gap_risk": meeting_gap_risk,
+        "junction_merge_risk": junction_merge_risk,
         "min_passing_bays": min_passing_bays,
         "passing_bay_shortage_risk": passing_bay_shortage_risk,
         "selected_aisle_class": _aisle_class_report(aisle_class),
@@ -602,6 +620,7 @@ def _narrow_two_way_risk_reports(layout: LayoutResult) -> dict[str, Any]:
         "passing_bays": passing_bay_reports,
         "passing_bay_spacing": passing_bay_spacing_reports,
         "meeting_risks": meeting_risks,
+        "junction_merge_risks": junction_merge_risks,
         "summary": summary,
         "summary_risks": summary_risks,
         "aisle_issues": aisle_issues,
@@ -618,6 +637,7 @@ def _narrow_two_way_summary(
     passing_bay_reports: list[dict[str, Any]],
     passing_bay_spacing_reports: list[dict[str, Any]],
     meeting_risks: list[dict[str, Any]],
+    junction_merge_risks: list[dict[str, Any]],
     min_passing_bays: int | None,
 ) -> dict[str, Any]:
     affected_stall_count = len(stall_issues)
@@ -634,6 +654,7 @@ def _narrow_two_way_summary(
     )
     junction_gap_count = sum(int(item.get("junction_gap_count", 0)) for item in passing_bay_spacing_reports)
     meeting_risk_counts = _issue_counts(meeting_risks)
+    junction_merge_issue_counts = _junction_merge_issue_counts(junction_merge_risks)
     shortage_count = (
         max(min_passing_bays - usable_passing_bay_count, 0)
         if is_narrow_two_way and min_passing_bays is not None
@@ -662,6 +683,10 @@ def _narrow_two_way_summary(
         "junction_meeting_trap_count": _junction_meeting_risk_count(meeting_risk_counts),
         "mid_segment_meeting_risk_count": meeting_risk_counts.get("refuge_to_refuge_gap_exceeds_limit", 0),
         "meeting_risk_counts": meeting_risk_counts,
+        "junction_merge_issue_count": len(junction_merge_risks),
+        "junction_merge_missing_refuge_count": junction_merge_issue_counts.get("multi_approach_junction_without_refuge", 0),
+        "junction_merge_overlong_approach_count": junction_merge_issue_counts.get("multi_approach_junction_with_overlong_approach", 0),
+        "junction_merge_issue_counts": junction_merge_issue_counts,
         "min_passing_bays": min_passing_bays,
         "passing_bay_shortage_count": shortage_count,
         "narrow_two_way_aisle_count": len(aisle_issues),
@@ -826,6 +851,18 @@ def _issue_counts(items: list[dict[str, Any]]) -> dict[str, int]:
         if issue is None:
             continue
         counts[str(issue)] = counts.get(str(issue), 0) + 1
+    return counts
+
+
+def _junction_merge_issue_counts(items: list[dict[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for item in items:
+        issues = item.get("issues")
+        if not isinstance(issues, list):
+            issue = item.get("issue")
+            issues = [issue] if issue is not None else []
+        for issue in issues:
+            counts[str(issue)] = counts.get(str(issue), 0) + 1
     return counts
 
 
@@ -1039,6 +1076,88 @@ def _narrow_two_way_meeting_risks(
             )
             risk_index += 1
     return risks
+
+
+def _narrow_two_way_junction_merge_risks(
+    spacing_reports: list[dict[str, Any]],
+    junction_merge_risk: float,
+) -> list[dict[str, Any]]:
+    approaches_by_junction: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for spacing in spacing_reports:
+        aisle_id = spacing.get("aisle_id")
+        if aisle_id is None:
+            continue
+        gaps = spacing.get("gaps", [])
+        if not isinstance(gaps, list):
+            continue
+        for gap in gaps:
+            if not isinstance(gap, dict):
+                continue
+            for side in ("start", "end"):
+                if gap.get(f"{side}_network_kind") != "aisle_junction":
+                    continue
+                remote_ids = _junction_network_ids(gap.get(f"{side}_network_id"))
+                for remote_id in remote_ids:
+                    key = tuple(sorted((str(aisle_id), remote_id)))
+                    opposite_side = "end" if side == "start" else "start"
+                    approaches_by_junction.setdefault(key, []).append(
+                        {
+                            "aisle_id": str(aisle_id),
+                            "junction_aisle_id": remote_id,
+                            "junction_side": side,
+                            "opposite_network_kind": gap.get(f"{opposite_side}_network_kind"),
+                            "opposite_network_id": gap.get(f"{opposite_side}_network_id"),
+                            "segment_type": gap.get("segment_type"),
+                            "network_segment_type": gap.get("network_segment_type"),
+                            "length": float(gap.get("length", 0.0)),
+                            "exceeds_limit": bool(gap.get("exceeds_limit")),
+                            "has_refuge": gap.get(f"{opposite_side}_network_kind") == "passing_bay_refuge",
+                        }
+                    )
+
+    risks: list[dict[str, Any]] = []
+    for index, (junction_key, approaches) in enumerate(sorted(approaches_by_junction.items()), start=1):
+        unique_approach_keys = {
+            (
+                item["aisle_id"],
+                item["junction_side"],
+                item["opposite_network_kind"],
+                item["opposite_network_id"],
+            )
+            for item in approaches
+        }
+        approach_count = len(unique_approach_keys)
+        if approach_count < 3:
+            continue
+        refuge_approach_count = sum(1 for item in approaches if item["has_refuge"])
+        overlong_approach_count = sum(1 for item in approaches if item["exceeds_limit"])
+        issues: list[str] = []
+        if refuge_approach_count == 0:
+            issues.append("multi_approach_junction_without_refuge")
+        if overlong_approach_count:
+            issues.append("multi_approach_junction_with_overlong_approach")
+        if not issues:
+            continue
+        risks.append(
+            {
+                "id": f"OQ-NARROW-TWO-WAY-JUNCTION-MERGE-{index:03d}",
+                "issue": issues[0],
+                "issues": issues,
+                "junction_aisle_ids": list(junction_key),
+                "approach_count": approach_count,
+                "refuge_approach_count": refuge_approach_count,
+                "overlong_approach_count": overlong_approach_count,
+                "approaches": approaches,
+                "risk_score": float(junction_merge_risk),
+            }
+        )
+    return risks
+
+
+def _junction_network_ids(raw: object) -> list[str]:
+    if raw is None:
+        return []
+    return [item.strip() for item in str(raw).split(",") if item.strip()]
 
 
 def _meeting_issue_for_gap(gap: dict[str, Any]) -> str:
@@ -1930,6 +2049,24 @@ def _directionality_conflicts(directionality_risks: dict[str, Any]) -> list[dict
 
 def _narrow_two_way_conflicts(narrow_two_way_risks: dict[str, Any]) -> list[dict[str, Any]]:
     conflicts = []
+    raw_junction_merge = narrow_two_way_risks.get("junction_merge_risks", [])
+    if isinstance(raw_junction_merge, list):
+        for item in raw_junction_merge:
+            if not isinstance(item, dict) or float(item.get("risk_score", 0.0)) <= 0:
+                continue
+            conflicts.append(
+                {
+                    "source_type": "narrow_two_way_junction_merge",
+                    "source_id": item["id"],
+                    "issue": item["issue"],
+                    "issues": list(item.get("issues", [])),
+                    "junction_aisle_ids": list(item.get("junction_aisle_ids", [])),
+                    "approach_count": item["approach_count"],
+                    "refuge_approach_count": item["refuge_approach_count"],
+                    "overlong_approach_count": item["overlong_approach_count"],
+                    "risk_score": item["risk_score"],
+                }
+            )
     raw_meeting = narrow_two_way_risks.get("meeting_risks", [])
     if isinstance(raw_meeting, list):
         for item in raw_meeting:

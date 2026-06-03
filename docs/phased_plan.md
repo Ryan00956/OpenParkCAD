@@ -1366,6 +1366,39 @@ Current rules:
   conflicts. It makes the route proxy aware of the missing internal junction
   node so those checks can be layered later.
 
+### Phase 5Q: Narrow Two-Way Junction Merge Proxy
+
+Narrow two-way reports now include a junction-level merge proxy for branch or
+connector junctions.
+
+Current rules:
+
+- The checker groups spacing gaps that touch the same pair of generated aisles,
+  so a parent-side projected junction and a branch-side endpoint junction are
+  treated as one junction.
+- A junction with at least three approaches is reported as a multi-approach
+  merge point.
+- Each approach records the aisle id, opposite network anchor, segment length,
+  segment type, whether it exceeds the configured spacing threshold, and
+  whether the opposite anchor is a passing bay refuge.
+- Reports include:
+  - `approach_count`
+  - `refuge_approach_count`
+  - `overlong_approach_count`
+  - `issues`
+- Current issues include:
+  - `multi_approach_junction_without_refuge`
+  - `multi_approach_junction_with_overlong_approach`
+- `optimization.operational_narrow_two_way_junction_merge_risk` can assign a
+  risk score per reported merge point. It defaults to zero, so existing layouts
+  remain diagnostic unless explicitly gated.
+- `operational_quality.narrow_two_way_summary.junction_merge_issue_count`,
+  `junction_merge_missing_refuge_count`, and
+  `junction_merge_overlong_approach_count` summarize these proxy risks.
+- This is still not a swept-path or right-of-way simulation. It identifies the
+  junctions where a later vehicle movement model needs to reason about yielding
+  space, refuge placement, and approach priority.
+
 ## Implementation Principle
 
 Keep these layers separate in code:
