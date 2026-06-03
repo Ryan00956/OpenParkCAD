@@ -994,9 +994,12 @@ optimization operational_directionality_issue_ratio_risk active for Phase 5G dir
 optimization operational_narrow_two_way_issue_risk active for Phase 5H per-stall narrow two-way exposure risk
 optimization operational_max_narrow_two_way_stall_ratio active for Phase 5H narrow two-way stall ratio threshold
 optimization operational_narrow_two_way_stall_ratio_risk active for Phase 5H narrow two-way ratio risk score
-optimization operational_min_passing_bays active for Phase 5I passing bay marker shortage threshold
-optimization operational_passing_bay_shortage_risk active for Phase 5I passing bay marker shortage risk score
-optimization weights.operational_risk active for Phase 5I soft-risk scoring
+optimization operational_min_passing_bays active for Phase 5J usable passing bay shortage threshold
+optimization operational_passing_bay_shortage_risk active for Phase 5J usable passing bay shortage risk score
+optimization operational_passing_bay_touch_tolerance active for Phase 5J passing bay-to-aisle association tolerance
+optimization operational_min_passing_bay_area active for Phase 5J passing bay geometry area threshold
+optimization operational_passing_bay_geometry_issue_risk active for Phase 5J unusable passing bay geometry risk score
+optimization weights.operational_risk active for Phase 5J soft-risk scoring
 optimization weights                    active for Phase 1 scoring
 optimization score breakdown            active in JSON report
 optimization promote_candidate_layout_preview active as guarded opt-in
@@ -1006,7 +1009,7 @@ report selected_connectors              active, includes removed and added stall
 report traffic_graph validation          active in JSON report
 report maneuver_validation              active in JSON report
 report maneuver_validation rule_counts  active in JSON report
-report operational_quality              active as Phase 5I local, route, summary, directionality, narrow two-way, and passing bay marker risk report
+report operational_quality              active as Phase 5J local, route, summary, directionality, narrow two-way, and passing bay geometry risk report
 report selected_stall_type_id           active in JSON report
 report stall_type_attempts              active in JSON report
 report selected_stall_assignment        active in JSON report

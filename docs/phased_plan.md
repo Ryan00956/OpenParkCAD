@@ -1195,6 +1195,32 @@ Current rules:
 - Passing bay shortage risks contribute to `operational_quality.risk_score`, so
   the existing `score_only`, `promotion_gate`, and `hard_reject` modes apply.
 
+### Phase 5J: Passing Bay Geometry Association Report
+
+Passing bay markers now get a first geometric usability check before they count
+toward narrow two-way mitigation.
+
+Current rules:
+
+- A passing bay marker can provide geometry through a standard `geometry`
+  object or through `center + width + length`.
+- Supported `geometry.type` values are `polygon`, `rectangle`, `circle`, and
+  `polyline_buffer`.
+- The checker associates a marker to its explicit `aisle_id` when provided, or
+  to the nearest generated narrow two-way aisle when the marker is close enough.
+- `optimization.operational_passing_bay_touch_tolerance` controls the allowed
+  distance from a passing bay geometry to the associated aisle and defaults to
+  0.25 drawing units.
+- `optimization.operational_min_passing_bay_area` can require a minimum usable
+  passing bay area.
+- `optimization.operational_passing_bay_geometry_issue_risk` can assign risk to
+  unusable passing bay markers. It defaults to zero, so marker geometry problems
+  remain diagnostic unless configured.
+- `optimization.operational_min_passing_bays` now counts usable passing bays,
+  not raw marker count.
+- This still does not verify passing bay spacing along a long narrow two-way
+  aisle, line-of-sight, priority rules, or head-to-head vehicle simulation.
+
 ## Implementation Principle
 
 Keep these layers separate in code:

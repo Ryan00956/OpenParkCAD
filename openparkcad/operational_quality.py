@@ -4,7 +4,8 @@ from heapq import heappop, heappush
 from itertools import combinations
 from typing import Any
 
-from shapely.geometry import Point as ShapelyPoint, Polygon as ShapelyPolygon
+from shapely import affinity
+from shapely.geometry import LineString, Point as ShapelyPoint, Polygon as ShapelyPolygon
 
 from openparkcad.models import LayoutResult, ParkingAisle, ParkingStall, SiteSpec
 from openparkcad.traffic_graph import build_traffic_graph
@@ -67,7 +68,7 @@ def operational_quality_report(layout: LayoutResult) -> dict[str, Any]:
     if narrow_two_way_risk_score:
         warnings.append(f"{narrow_two_way_risk_score:g} narrow two-way operational risk score is reported")
     return {
-        "version": "phase5i-1",
+        "version": "phase5j-1",
         "status": "active_failed" if not valid else "report_only",
         "mode": mode,
         "valid": valid,
@@ -413,6 +414,17 @@ def _narrow_two_way_risk_reports(layout: LayoutResult) -> dict[str, Any]:
         layout.site.optimization.get("operational_narrow_two_way_stall_ratio_risk", 1.0),
         1.0,
     )
+    passing_bay_touch_tolerance = _nonnegative_float(
+        layout.site.optimization.get("operational_passing_bay_touch_tolerance", 0.25),
+        0.25,
+    )
+    min_passing_bay_area = _optional_nonnegative_float(
+        layout.site.optimization.get("operational_min_passing_bay_area")
+    )
+    passing_bay_geometry_issue_risk = _nonnegative_float(
+        layout.site.optimization.get("operational_passing_bay_geometry_issue_risk", 0.0),
+        0.0,
+    )
     passing_bay_shortage_risk = _nonnegative_float(
         layout.site.optimization.get("operational_passing_bay_shortage_risk", 1.0),
         1.0,
@@ -424,18 +436,23 @@ def _narrow_two_way_risk_reports(layout: LayoutResult) -> dict[str, Any]:
             len(layout.stalls),
             aisle_class,
             passing_bays,
+            [],
             min_passing_bays,
         )
         return {
-            "version": "phase5i-1",
+            "version": "phase5j-1",
             "status": "not_applicable",
             "risk_count": 0,
             "risk_score": 0.0,
             "stall_issue_risk_score": 0.0,
+            "passing_bay_issue_risk_score": 0.0,
             "summary_risk_score": 0.0,
             "narrow_two_way_issue_risk": issue_risk,
             "max_narrow_two_way_stall_ratio": max_stall_ratio,
             "narrow_two_way_stall_ratio_risk": stall_ratio_risk,
+            "passing_bay_touch_tolerance": passing_bay_touch_tolerance,
+            "min_passing_bay_area": min_passing_bay_area,
+            "passing_bay_geometry_issue_risk": passing_bay_geometry_issue_risk,
             "min_passing_bays": min_passing_bays,
             "passing_bay_shortage_risk": passing_bay_shortage_risk,
             "selected_aisle_class": _aisle_class_report(aisle_class),
@@ -447,14 +464,27 @@ def _narrow_two_way_risk_reports(layout: LayoutResult) -> dict[str, Any]:
             "stall_issues": [],
         }
 
-    passing_bay_model_available = bool(passing_bays)
+    narrow_aisles = [aisle for aisle in layout.aisles if aisle.role != "turnaround"]
+    passing_bay_reports = _passing_bay_reports(
+        passing_bays,
+        narrow_aisles,
+        passing_bay_touch_tolerance,
+        min_passing_bay_area,
+        passing_bay_geometry_issue_risk,
+    )
+    usable_passing_bay_count = sum(1 for item in passing_bay_reports if item["usable"])
+    passing_bay_model_available = bool(passing_bay_reports)
     aisle_issue = (
-        "narrow_two_way_passing_bay_geometry_not_checked"
+        "narrow_two_way_passing_bay_spacing_not_checked"
+        if usable_passing_bay_count
+        else "narrow_two_way_without_usable_passing_bay"
         if passing_bay_model_available
         else "narrow_two_way_without_passing_bay_model"
     )
     stall_issue = (
-        "stall_served_by_narrow_two_way_aisle_pending_passing_bay_geometry_check"
+        "stall_served_by_narrow_two_way_aisle_pending_passing_bay_spacing_check"
+        if usable_passing_bay_count
+        else "stall_served_by_narrow_two_way_aisle_without_usable_passing_bay"
         if passing_bay_model_available
         else "stall_served_by_narrow_two_way_aisle_without_passing_bay_model"
     )
@@ -481,12 +511,14 @@ def _narrow_two_way_risk_reports(layout: LayoutResult) -> dict[str, Any]:
         if stall.served_by_aisle_id in narrow_aisle_ids
     ]
     stall_issue_risk_score = sum(float(item["risk_score"]) for item in stall_issues)
+    passing_bay_issue_risk_score = sum(float(item["risk_score"]) for item in passing_bay_reports)
     summary = _narrow_two_way_summary(
         aisle_issues,
         stall_issues,
         len(layout.stalls),
         aisle_class,
         passing_bays,
+        passing_bay_reports,
         min_passing_bays,
     )
     summary_risks = _narrow_two_way_summary_risks(
@@ -497,20 +529,28 @@ def _narrow_two_way_risk_reports(layout: LayoutResult) -> dict[str, Any]:
     )
     summary_risk_score = sum(float(item["risk_score"]) for item in summary_risks)
     return {
-        "version": "phase5i-1",
+        "version": "phase5j-1",
         "status": "active",
-        "risk_count": len([item for item in stall_issues if float(item["risk_score"]) > 0]) + len(summary_risks),
-        "risk_score": float(stall_issue_risk_score + summary_risk_score),
+        "risk_count": (
+            len([item for item in stall_issues if float(item["risk_score"]) > 0])
+            + len([item for item in passing_bay_reports if float(item["risk_score"]) > 0])
+            + len(summary_risks)
+        ),
+        "risk_score": float(stall_issue_risk_score + passing_bay_issue_risk_score + summary_risk_score),
         "stall_issue_risk_score": float(stall_issue_risk_score),
+        "passing_bay_issue_risk_score": float(passing_bay_issue_risk_score),
         "summary_risk_score": float(summary_risk_score),
         "narrow_two_way_issue_risk": issue_risk,
         "max_narrow_two_way_stall_ratio": max_stall_ratio,
         "narrow_two_way_stall_ratio_risk": stall_ratio_risk,
+        "passing_bay_touch_tolerance": passing_bay_touch_tolerance,
+        "min_passing_bay_area": min_passing_bay_area,
+        "passing_bay_geometry_issue_risk": passing_bay_geometry_issue_risk,
         "min_passing_bays": min_passing_bays,
         "passing_bay_shortage_risk": passing_bay_shortage_risk,
         "selected_aisle_class": _aisle_class_report(aisle_class),
         "passing_bay_model_available": summary["passing_bay_model_available"],
-        "passing_bays": passing_bays,
+        "passing_bays": passing_bay_reports,
         "summary": summary,
         "summary_risks": summary_risks,
         "aisle_issues": aisle_issues,
@@ -524,13 +564,16 @@ def _narrow_two_way_summary(
     checked_stall_count: int,
     aisle_class,
     passing_bays: list[dict[str, Any]],
+    passing_bay_reports: list[dict[str, Any]],
     min_passing_bays: int | None,
 ) -> dict[str, Any]:
     affected_stall_count = len(stall_issues)
     is_narrow_two_way = _is_narrow_two_way_class(aisle_class)
     passing_bay_marker_count = len(passing_bays)
+    usable_passing_bay_count = sum(1 for item in passing_bay_reports if item.get("usable"))
+    invalid_passing_bay_count = len(passing_bay_reports) - usable_passing_bay_count
     shortage_count = (
-        max(min_passing_bays - passing_bay_marker_count, 0)
+        max(min_passing_bays - usable_passing_bay_count, 0)
         if is_narrow_two_way and min_passing_bays is not None
         else 0
     )
@@ -539,6 +582,9 @@ def _narrow_two_way_summary(
         "is_narrow_two_way": is_narrow_two_way,
         "passing_bay_model_available": bool(passing_bays),
         "passing_bay_marker_count": passing_bay_marker_count,
+        "usable_passing_bay_count": usable_passing_bay_count,
+        "invalid_passing_bay_count": invalid_passing_bay_count,
+        "passing_bay_geometry_checked": is_narrow_two_way,
         "min_passing_bays": min_passing_bays,
         "passing_bay_shortage_count": shortage_count,
         "narrow_two_way_aisle_count": len(aisle_issues),
@@ -592,6 +638,7 @@ def _narrow_two_way_summary_risks(
                 "id": "OQ-NARROW-TWO-WAY-PASSING-BAY-SHORTAGE",
                 "issue": "passing_bay_count_below_minimum",
                 "passing_bay_marker_count": summary["passing_bay_marker_count"],
+                "usable_passing_bay_count": summary["usable_passing_bay_count"],
                 "min_passing_bays": summary["min_passing_bays"],
                 "passing_bay_shortage_count": int(shortage_count),
                 "risk_score": float(shortage_count * passing_bay_shortage_risk),
@@ -740,6 +787,163 @@ def _passing_bay_markers(site: SiteSpec) -> list[dict[str, Any]]:
                 marker[key] = feature[key]
         markers.append(marker)
     return markers
+
+
+def _passing_bay_reports(
+    markers: list[dict[str, Any]],
+    aisles: list[ParkingAisle],
+    touch_tolerance: float,
+    min_area: float | None,
+    issue_risk: float,
+) -> list[dict[str, Any]]:
+    aisle_polygons = [(aisle, ShapelyPolygon(aisle.polygon)) for aisle in aisles]
+    reports: list[dict[str, Any]] = []
+    for marker in markers:
+        geometry, geometry_source = _passing_bay_geometry(marker)
+        area = float(geometry.area) if geometry is not None else None
+        center = _passing_bay_center(marker, geometry)
+        associated_aisle, aisle_distance, aisle_overlap_area = _associated_passing_bay_aisle(
+            marker,
+            geometry,
+            center,
+            aisle_polygons,
+            touch_tolerance,
+        )
+        issues: list[str] = []
+        if geometry is None:
+            issues.append("passing_bay_geometry_missing")
+        if associated_aisle is None:
+            issues.append("passing_bay_not_associated_with_narrow_two_way_aisle")
+        elif aisle_distance is not None and aisle_distance > touch_tolerance + 1e-9:
+            issues.append("passing_bay_not_adjacent_to_aisle")
+        if min_area is not None and area is not None and area + 1e-9 < min_area:
+            issues.append("passing_bay_area_below_minimum")
+        usable = not issues
+        reports.append(
+            {
+                **marker,
+                "geometry_available": geometry is not None,
+                "geometry_source": geometry_source,
+                "area": area,
+                "center": list(center) if center is not None else None,
+                "associated_aisle_id": associated_aisle.id if associated_aisle else None,
+                "distance_to_associated_aisle": aisle_distance,
+                "aisle_overlap_area": aisle_overlap_area,
+                "usable": usable,
+                "issues": issues,
+                "risk_score": float(issue_risk if issues else 0.0),
+            }
+        )
+    return reports
+
+
+def _passing_bay_geometry(marker: dict[str, Any]):
+    geometry = marker.get("geometry")
+    if isinstance(geometry, dict):
+        parsed = _feature_geometry_polygon(geometry)
+        if parsed is not None and parsed.area > 1e-9:
+            return parsed, str(geometry.get("type", "geometry"))
+    center = _raw_point(marker.get("center"))
+    width = _optional_positive_float(marker.get("width"))
+    length = _optional_positive_float(marker.get("length") if "length" in marker else marker.get("height"))
+    if center is not None and width is not None and length is not None:
+        cx, cy = center
+        polygon = ShapelyPolygon(
+            [
+                (cx - width / 2, cy - length / 2),
+                (cx + width / 2, cy - length / 2),
+                (cx + width / 2, cy + length / 2),
+                (cx - width / 2, cy + length / 2),
+            ]
+        )
+        return polygon, "center_width_length"
+    return None, None
+
+
+def _feature_geometry_polygon(geometry: dict[str, Any]):
+    geometry_type = _normalized_feature_type(geometry.get("type"))
+    if geometry_type == "polygon":
+        points = [_raw_point(item) for item in geometry.get("points", [])]
+        clean_points = [item for item in points if item is not None]
+        if len(clean_points) >= 3:
+            return ShapelyPolygon(clean_points)
+        return None
+    if geometry_type == "rectangle":
+        origin = _raw_point(geometry.get("origin"))
+        width = _optional_positive_float(geometry.get("width"))
+        height = _optional_positive_float(geometry.get("height") if "height" in geometry else geometry.get("length"))
+        if origin is None or width is None or height is None:
+            return None
+        polygon = ShapelyPolygon([(0.0, 0.0), (width, 0.0), (width, height), (0.0, height)])
+        polygon = affinity.rotate(
+            polygon,
+            float(geometry.get("rotation_degrees", 0.0)),
+            origin=(0.0, 0.0),
+            use_radians=False,
+        )
+        return affinity.translate(polygon, xoff=origin[0], yoff=origin[1])
+    if geometry_type == "circle":
+        center = _raw_point(geometry.get("center"))
+        radius = _optional_positive_float(geometry.get("radius"))
+        if center is None or radius is None:
+            return None
+        return ShapelyPoint(center).buffer(radius)
+    if geometry_type == "polyline_buffer":
+        points = [_raw_point(item) for item in geometry.get("points", [])]
+        clean_points = [item for item in points if item is not None]
+        width = _optional_positive_float(geometry.get("width"))
+        if len(clean_points) < 2 or width is None:
+            return None
+        return LineString(clean_points).buffer(width / 2, cap_style="flat", join_style="mitre")
+    return None
+
+
+def _passing_bay_center(marker: dict[str, Any], geometry) -> tuple[float, float] | None:
+    explicit = _raw_point(marker.get("center"))
+    if explicit is not None:
+        return explicit
+    if geometry is not None:
+        centroid = geometry.centroid
+        return (float(centroid.x), float(centroid.y))
+    return None
+
+
+def _associated_passing_bay_aisle(
+    marker: dict[str, Any],
+    geometry,
+    center: tuple[float, float] | None,
+    aisle_polygons,
+    touch_tolerance: float,
+):
+    if not aisle_polygons:
+        return None, None, None
+    marker_aisle_id = marker.get("aisle_id")
+    candidates = [
+        item
+        for item in aisle_polygons
+        if marker_aisle_id is not None and item[0].id == str(marker_aisle_id)
+    ]
+    if not candidates:
+        candidates = aisle_polygons
+    target = geometry if geometry is not None else ShapelyPoint(center) if center is not None else None
+    if target is None:
+        if marker_aisle_id is not None and candidates:
+            return candidates[0][0], None, None
+        return None, None, None
+    measured = [
+        (
+            aisle,
+            float(target.distance(polygon)),
+            float(target.intersection(polygon).area) if geometry is not None else 0.0,
+        )
+        for aisle, polygon in candidates
+    ]
+    if not measured:
+        return None, None, None
+    aisle, distance, overlap_area = min(measured, key=lambda item: item[1])
+    if marker_aisle_id is None and distance > touch_tolerance + 1e-9:
+        return None, distance, overlap_area
+    return aisle, distance, overlap_area
 
 
 def _normalized_feature_type(raw: object) -> str:
@@ -1001,11 +1205,30 @@ def _optional_nonnegative_float(raw: object) -> float | None:
         return None
 
 
+def _optional_positive_float(raw: object) -> float | None:
+    if raw is None:
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
 def _optional_nonnegative_int(raw: object) -> int | None:
     value = _optional_nonnegative_float(raw)
     if value is None:
         return None
     return int(value)
+
+
+def _raw_point(raw: object) -> tuple[float, float] | None:
+    if not isinstance(raw, list | tuple) or len(raw) != 2:
+        return None
+    try:
+        return (float(raw[0]), float(raw[1]))
+    except (TypeError, ValueError):
+        return None
 
 
 def _optional_ratio(raw: object) -> float | None:
@@ -1165,6 +1388,22 @@ def _directionality_conflicts(directionality_risks: dict[str, Any]) -> list[dict
 
 def _narrow_two_way_conflicts(narrow_two_way_risks: dict[str, Any]) -> list[dict[str, Any]]:
     conflicts = []
+    raw_passing_bays = narrow_two_way_risks.get("passing_bays", [])
+    if isinstance(raw_passing_bays, list):
+        for item in raw_passing_bays:
+            if not isinstance(item, dict) or float(item.get("risk_score", 0.0)) <= 0:
+                continue
+            conflicts.append(
+                {
+                    "source_type": "passing_bay",
+                    "source_id": f"OQ-PASSING-BAY-{item['id']}",
+                    "passing_bay_id": item["id"],
+                    "associated_aisle_id": item.get("associated_aisle_id"),
+                    "usable": item.get("usable"),
+                    "issues": list(item.get("issues", [])),
+                    "risk_score": item["risk_score"],
+                }
+            )
     raw_stalls = narrow_two_way_risks.get("stall_issues", [])
     if isinstance(raw_stalls, list):
         for item in raw_stalls:
@@ -1197,6 +1436,7 @@ def _narrow_two_way_conflicts(narrow_two_way_risks: dict[str, Any]) -> list[dict
                 "affected_stall_count",
                 "checked_stall_count",
                 "passing_bay_marker_count",
+                "usable_passing_bay_count",
                 "min_passing_bays",
                 "passing_bay_shortage_count",
             ):

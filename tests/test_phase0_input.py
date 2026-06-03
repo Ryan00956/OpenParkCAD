@@ -124,7 +124,7 @@ def test_phase0_diagnostics_mark_main_aisle_connection_active_with_layout():
     assert layout.stall_count == 83
     assert layout.candidate_layout_promotion["status"] == "promoted"
     assert layout.maneuver_validation["rule_counts"]["perpendicular_90_l_shape_proxy"] == 2
-    assert layout.operational_quality["version"] == "phase5i-1"
+    assert layout.operational_quality["version"] == "phase5j-1"
     assert "operational_risk" in layout.score
     assert diagnostics["field_support"]["entrances"] == "active"
     assert diagnostics["field_support"]["constraints.entrance_to_main_aisle"] == "active"
@@ -152,6 +152,9 @@ def test_phase0_diagnostics_mark_main_aisle_connection_active_with_layout():
     assert diagnostics["field_support"]["optimization.operational_max_narrow_two_way_stall_ratio"] == "available"
     assert diagnostics["field_support"]["optimization.operational_min_passing_bays"] == "available"
     assert diagnostics["field_support"]["optimization.operational_passing_bay_shortage_risk"] == "available"
+    assert diagnostics["field_support"]["optimization.operational_passing_bay_touch_tolerance"] == "available"
+    assert diagnostics["field_support"]["optimization.operational_min_passing_bay_area"] == "available"
+    assert diagnostics["field_support"]["optimization.operational_passing_bay_geometry_issue_risk"] == "available"
     assert diagnostics["field_support"]["constraints.maneuver_l_shape_fallback"] == "active"
     assert diagnostics["field_support"]["constraints.operational_quality"] == "active"
     assert diagnostics["field_support"]["constraints.operational_directionality_risk"] == "active"
