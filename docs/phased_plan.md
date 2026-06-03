@@ -1027,6 +1027,33 @@ Current rules:
   same comparison report that already checks geometry, maneuvers, graph
   validity, dead ends, and score delta.
 
+### Phase 5C: Stall Route Risk Report
+
+Operational quality now includes a first path-level report for each stall.
+This is still a graph proxy, not a swept-path traffic simulation.
+
+Current rules:
+
+- The checker reuses the Phase 2 traffic graph.
+- Each stall is associated with its serving aisle graph node.
+- The report computes the shortest entry path length from any entry-capable
+  entrance to the serving aisle node.
+- The report computes the shortest exit path length from the serving aisle node
+  to any exit-capable entrance.
+- Path length uses the current aisle-node centroid graph, so it is an
+  explainable first approximation rather than exact wheel travel distance.
+- The report marks stalls that depend on a dead-end turnaround aisle attached
+  to their serving aisle.
+- `optimization.operational_max_route_length` can turn excessive route length
+  into route risk. If omitted, route lengths are reported but not penalized.
+- `optimization.operational_turnaround_dependency_risk` can assign a soft risk
+  to stalls that depend on dead-end turnaround circulation. It defaults to zero.
+- Route risks are added to `operational_quality.risk_score`, so the existing
+  `score_only`, `promotion_gate`, and `hard_reject` modes apply without a new
+  gating mechanism.
+- Reports include `route_risk_score`, `route_risk_count`, and
+  `route_risks.routes`.
+
 ## Implementation Principle
 
 Keep these layers separate in code:

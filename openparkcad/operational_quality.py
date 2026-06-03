@@ -1,19 +1,23 @@
 from __future__ import annotations
 
+from heapq import heappop, heappush
 from itertools import combinations
 from typing import Any
 
 from shapely.geometry import Point as ShapelyPoint, Polygon as ShapelyPolygon
 
 from openparkcad.models import LayoutResult, ParkingAisle, ParkingStall, SiteSpec
+from openparkcad.traffic_graph import build_traffic_graph
 
 
 def operational_quality_report(layout: LayoutResult) -> dict[str, Any]:
     junctions = _junction_reports(layout)
     entrance_throats = _entrance_throat_reports(layout)
+    route_risks = _route_risk_reports(layout)
     junction_conflicts = sum(len(item["conflicting_stalls"]) for item in junctions)
     entrance_conflicts = sum(len(item["conflicting_stalls"]) for item in entrance_throats)
-    risk_score = float(junction_conflicts + entrance_conflicts)
+    route_risk_score = float(route_risks["risk_score"])
+    risk_score = float(junction_conflicts + entrance_conflicts + route_risk_score)
     mode = _operational_quality_mode(layout.site)
     max_allowed_risk_score = _max_allowed_risk_score(layout.site)
     risk_exceeds_limit = (
@@ -21,7 +25,7 @@ def operational_quality_report(layout: LayoutResult) -> dict[str, Any]:
         and risk_score > max_allowed_risk_score + 1e-9
     )
     blocking_conflicts = (
-        _blocking_conflicts(junctions, entrance_throats)
+        _blocking_conflicts(junctions, entrance_throats, route_risks)
         if mode in {"promotion_gate", "hard_reject"} and risk_exceeds_limit
         else []
     )
@@ -40,8 +44,10 @@ def operational_quality_report(layout: LayoutResult) -> dict[str, Any]:
         warnings.append(
             f"operational risk score {risk_score:g} exceeds configured limit {max_allowed_risk_score:g}"
         )
+    if route_risk_score:
+        warnings.append(f"{route_risk_score:g} route-level operational risk score is reported")
     return {
-        "version": "phase5b-1",
+        "version": "phase5c-1",
         "status": "active_failed" if not valid else "report_only",
         "mode": mode,
         "valid": valid,
@@ -54,9 +60,12 @@ def operational_quality_report(layout: LayoutResult) -> dict[str, Any]:
         "junction_conflict_count": junction_conflicts,
         "entrance_throat_count": len(entrance_throats),
         "entrance_throat_conflict_count": entrance_conflicts,
+        "route_risk_score": route_risk_score,
+        "route_risk_count": route_risks["risk_count"],
         "warnings": warnings,
         "junctions": junctions,
         "entrance_throats": entrance_throats,
+        "route_risks": route_risks,
     }
 
 
@@ -158,6 +167,145 @@ def _entrance_clearance_radius(site: SiteSpec, entrance_width: float) -> float:
     return _nonnegative_float(raw, default)
 
 
+def _route_risk_reports(layout: LayoutResult) -> dict[str, Any]:
+    graph = build_traffic_graph(layout)
+    node_points = {node.id: node.point for node in graph.nodes if node.point is not None}
+    entry_nodes = {_entrance_node_id(entrance.id) for entrance in layout.site.entrances if _allows_entry(entrance)}
+    exit_nodes = {_entrance_node_id(entrance.id) for entrance in layout.site.entrances if _allows_exit(entrance)}
+    max_route_length = _optional_nonnegative_float(layout.site.optimization.get("operational_max_route_length"))
+    turnaround_dependency_risk = _nonnegative_float(
+        layout.site.optimization.get("operational_turnaround_dependency_risk", 0.0),
+        0.0,
+    )
+    missing_route_risk = _nonnegative_float(
+        layout.site.optimization.get("operational_missing_route_risk", 1.0),
+        1.0,
+    )
+    if not entry_nodes or not exit_nodes:
+        return {
+            "version": "phase5c-1",
+            "status": "not_checked_no_entrance_or_exit",
+            "route_length_model": "aisle_node_centroid_graph",
+            "checked_stall_count": 0,
+            "risk_count": 0,
+            "risk_score": 0.0,
+            "max_route_length": max_route_length,
+            "turnaround_dependency_risk": turnaround_dependency_risk,
+            "routes": [],
+        }
+
+    forward = _weighted_adjacency(graph.edges, node_points, reverse=False)
+    reverse = _weighted_adjacency(graph.edges, node_points, reverse=True)
+    entry_distances = _shortest_distances(forward, entry_nodes)
+    exit_distances = _shortest_distances(reverse, exit_nodes)
+    turnaround_parent_ids = {
+        aisle.parent_aisle_id
+        for aisle in layout.aisles
+        if aisle.role == "turnaround" and aisle.parent_aisle_id
+    }
+
+    routes = []
+    risk_count = 0
+    risk_score = 0.0
+    for access in graph.stall_access:
+        issues: list[str] = []
+        aisle_node_id = access.aisle_node_id
+        entry_length = _finite_distance(entry_distances.get(aisle_node_id)) if aisle_node_id else None
+        exit_length = _finite_distance(exit_distances.get(aisle_node_id)) if aisle_node_id else None
+        route_length = entry_length + exit_length if entry_length is not None and exit_length is not None else None
+        depends_on_turnaround = bool(access.aisle_id and access.aisle_id in turnaround_parent_ids)
+        stall_risk = 0.0
+        if entry_length is None:
+            issues.append("missing_entry_path")
+            stall_risk += missing_route_risk
+        if exit_length is None:
+            issues.append("missing_exit_path")
+            stall_risk += missing_route_risk
+        if max_route_length is not None and route_length is not None and route_length > max_route_length + 1e-9:
+            issues.append("route_length_exceeds_limit")
+            stall_risk += 1.0
+        if depends_on_turnaround and turnaround_dependency_risk > 0:
+            issues.append("depends_on_dead_end_turnaround")
+            stall_risk += turnaround_dependency_risk
+        if stall_risk:
+            risk_count += 1
+            risk_score += stall_risk
+        routes.append(
+            {
+                "stall_id": access.stall_id,
+                "aisle_id": access.aisle_id,
+                "aisle_node_id": aisle_node_id,
+                "entry_path_length": entry_length,
+                "exit_path_length": exit_length,
+                "route_length": route_length,
+                "depends_on_dead_end_turnaround": depends_on_turnaround,
+                "issues": issues,
+                "risk_score": float(stall_risk),
+            }
+        )
+
+    return {
+        "version": "phase5c-1",
+        "status": "active",
+        "route_length_model": "aisle_node_centroid_graph",
+        "checked_stall_count": len(routes),
+        "risk_count": risk_count,
+        "risk_score": float(risk_score),
+        "max_route_length": max_route_length,
+        "turnaround_dependency_risk": turnaround_dependency_risk,
+        "routes": routes,
+    }
+
+
+def _weighted_adjacency(edges, node_points: dict[str, tuple[float, float]], reverse: bool) -> dict[str, list[tuple[str, float]]]:
+    adjacency: dict[str, list[tuple[str, float]]] = {}
+    for edge in edges:
+        _add_weighted_arc(adjacency, edge.from_node_id, edge.to_node_id, _edge_weight(edge.from_node_id, edge.to_node_id, node_points))
+        if edge.directionality == "two_way":
+            _add_weighted_arc(adjacency, edge.to_node_id, edge.from_node_id, _edge_weight(edge.to_node_id, edge.from_node_id, node_points))
+    if not reverse:
+        return adjacency
+    reversed_adjacency: dict[str, list[tuple[str, float]]] = {}
+    for source, targets in adjacency.items():
+        for target, weight in targets:
+            _add_weighted_arc(reversed_adjacency, target, source, weight)
+    return reversed_adjacency
+
+
+def _shortest_distances(adjacency: dict[str, list[tuple[str, float]]], starts: set[str]) -> dict[str, float]:
+    distances: dict[str, float] = {}
+    heap: list[tuple[float, str]] = []
+    for start in sorted(starts):
+        heappush(heap, (0.0, start))
+    while heap:
+        distance, node_id = heappop(heap)
+        if node_id in distances:
+            continue
+        distances[node_id] = distance
+        for target, weight in adjacency.get(node_id, []):
+            if target not in distances:
+                heappush(heap, (distance + weight, target))
+    return distances
+
+
+def _edge_weight(source: str, target: str, node_points: dict[str, tuple[float, float]]) -> float:
+    left = node_points.get(source)
+    right = node_points.get(target)
+    if left is None or right is None:
+        return 1.0
+    dx = left[0] - right[0]
+    dy = left[1] - right[1]
+    return float((dx * dx + dy * dy) ** 0.5)
+
+
+def _add_weighted_arc(adjacency: dict[str, list[tuple[str, float]]], source: str, target: str, weight: float) -> None:
+    adjacency.setdefault(source, []).append((target, weight))
+
+
+def _finite_distance(value: float | None) -> float | None:
+    return None if value is None else float(value)
+
+
 def _operational_quality_mode(site: SiteSpec) -> str:
     raw = site.optimization.get("operational_quality_mode", "score_only")
     mode = str(raw)
@@ -176,9 +324,19 @@ def _max_allowed_risk_score(site: SiteSpec) -> float | None:
         return None
 
 
+def _optional_nonnegative_float(raw: object) -> float | None:
+    if raw is None:
+        return None
+    try:
+        return max(float(raw), 0.0)
+    except (TypeError, ValueError):
+        return None
+
+
 def _blocking_conflicts(
     junctions: list[dict[str, Any]],
     entrance_throats: list[dict[str, Any]],
+    route_risks: dict[str, Any],
 ) -> list[dict[str, Any]]:
     conflicts: list[dict[str, Any]] = []
     for junction in junctions:
@@ -209,6 +367,8 @@ def _blocking_conflicts(
                     "distance_to_center": stall["distance_to_center"],
                 }
             )
+    for route in _route_conflicts(route_risks):
+        conflicts.append(route)
     return conflicts
 
 
@@ -217,6 +377,54 @@ def _stall_conflicts(report_item: dict[str, Any]) -> list[dict[str, Any]]:
     if not isinstance(raw, list):
         return []
     return [item for item in raw if isinstance(item, dict)]
+
+
+def _route_conflicts(route_risks: dict[str, Any]) -> list[dict[str, Any]]:
+    raw = route_risks.get("routes", [])
+    if not isinstance(raw, list):
+        return []
+    conflicts = []
+    for route in raw:
+        if not isinstance(route, dict) or not route.get("issues"):
+            continue
+        conflicts.append(
+            {
+                "source_type": "stall_route",
+                "source_id": f"OQ-ROUTE-{route['stall_id']}",
+                "stall_id": route["stall_id"],
+                "aisle_id": route["aisle_id"],
+                "issues": list(route["issues"]),
+                "entry_path_length": route["entry_path_length"],
+                "exit_path_length": route["exit_path_length"],
+                "route_length": route["route_length"],
+                "risk_score": route["risk_score"],
+            }
+        )
+    return conflicts
+
+
+def _entrance_node_id(entrance_id: str) -> str:
+    return f"N-ENTRANCE-{entrance_id}"
+
+
+def _allows_entry(entrance) -> bool:
+    if entrance.mode == "shared":
+        return True
+    if entrance.mode == "entry_only":
+        return True
+    if entrance.mode == "exit_only":
+        return False
+    return "enter" in entrance.allowed_movements
+
+
+def _allows_exit(entrance) -> bool:
+    if entrance.mode == "shared":
+        return True
+    if entrance.mode == "entry_only":
+        return False
+    if entrance.mode == "exit_only":
+        return True
+    return "exit" in entrance.allowed_movements
 
 
 def _nonnegative_float(raw: object, default: float) -> float:

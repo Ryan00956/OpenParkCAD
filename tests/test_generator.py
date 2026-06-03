@@ -180,7 +180,7 @@ def test_phase4b_shadow_selector_can_select_compatible_branch_candidates():
         assert not selected_ids.intersection(candidate.conflict_ids)
 
 
-def test_phase5b_operational_quality_blocker_can_stop_preview_promotion():
+def test_operational_quality_blocker_can_stop_preview_promotion():
     validation = {
         "valid": True,
         "traffic_graph": {"dead_ends": []},
