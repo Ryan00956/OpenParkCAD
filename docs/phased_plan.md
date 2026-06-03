@@ -1169,6 +1169,32 @@ Current rules:
   exposure report that prevents narrow two-way support from silently looking
   safe before passing bays and conflict rules exist.
 
+### Phase 5I: Passing Bay Marker Report
+
+Narrow two-way reporting now reads marker-level passing bay inputs before full
+passing bay geometry validation exists.
+
+Current rules:
+
+- `site_features` entries with `type = "passing_bay"`,
+  `type = "passing-bay"`, `type = "passing_bay_area"`, or
+  `type = "passing-bay-area"` are reported as passing bay markers.
+- The report preserves each marker id plus optional aisle id, side, center,
+  width, length, and geometry fields.
+- `operational_quality.narrow_two_way_summary.passing_bay_marker_count`
+  records how many markers are present.
+- `passing_bay_model_available` means marker-level passing bay data exists. It
+  does not mean full geometric coverage has been verified.
+- With marker data present, narrow two-way aisles are still reported as
+  `narrow_two_way_passing_bay_geometry_not_checked` until the geometry coverage
+  check exists.
+- `optimization.operational_min_passing_bays` can require a minimum number of
+  passing bay markers for narrow two-way layouts.
+- `optimization.operational_passing_bay_shortage_risk` controls the risk score
+  per missing marker and defaults to 1.0.
+- Passing bay shortage risks contribute to `operational_quality.risk_score`, so
+  the existing `score_only`, `promotion_gate`, and `hard_reject` modes apply.
+
 ## Implementation Principle
 
 Keep these layers separate in code:

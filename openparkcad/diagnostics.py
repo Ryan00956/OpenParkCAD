@@ -42,7 +42,7 @@ def build_input_diagnostics(site: SiteSpec, layout: LayoutResult | None = None) 
         warnings.append("vehicle dimensions are parsed; Phase 3 uses conservative access and turning-sweep envelopes, but full turning radius is not enforced yet")
     if site.site_features:
         parsed_future_fields.append("site_features")
-        warnings.append("site_features are parsed but not used for clearance or collision checks yet")
+        warnings.append("site_features are parsed and drawn; passing bay markers feed Phase 5I narrow two-way reports, while other clearance or collision checks are still future")
     if site.pedestrian_and_emergency:
         parsed_future_fields.append("pedestrian_and_emergency")
         warnings.append("pedestrian and emergency reservations are parsed but not enforced yet")
@@ -60,7 +60,7 @@ def build_input_diagnostics(site: SiteSpec, layout: LayoutResult | None = None) 
         warnings.append("optimization weights are active for Phase 1 scoring; candidate generation is still deliberately narrow")
     if layout and layout.operational_quality:
         mode = layout.operational_quality.get("mode", "score_only")
-        warnings.append(f"operational quality checks are active in {mode} mode for Phase 5H")
+        warnings.append(f"operational quality checks are active in {mode} mode for Phase 5I")
     unsupported = phase1_unsupported_inputs(site)
     warnings.extend(f"{item['field']} unsupported in Phase 1: {item['reason']}" for item in unsupported)
 
@@ -259,7 +259,7 @@ def _constraint_status(site: SiteSpec, layout: LayoutResult | None) -> list[dict
             "constraint": "operational quality risk report",
             "status": _operational_quality_status(layout),
             "note": (
-                "Phase 5H reports junction, entrance-throat, route, route-summary, directionality, and narrow two-way exposure risks; configured modes can score, gate promotion, or hard-reject risky layouts."
+                "Phase 5I reports junction, entrance-throat, route, route-summary, directionality, narrow two-way exposure, and passing bay marker shortage risks; configured modes can score, gate promotion, or hard-reject risky layouts."
                 if _operational_quality_status(layout) == "active"
                 else "Operational quality checks are only available after layout generation."
             ),
@@ -292,7 +292,11 @@ def _field_support(site: SiteSpec, layout: LayoutResult | None) -> dict[str, str
         "site.boundary.curve_loop": "future",
         "site.obstacles.polygon": "active",
         "site.reserved_areas": "future",
-        "site_features": "drawn_not_enforced" if site.site_features else "future",
+        "site_features": (
+            "partially_active"
+            if site.site_features and layout
+            else ("drawn_not_enforced" if site.site_features else "future")
+        ),
         "entrances": "active" if _phase1_main_aisle_active(layout) else ("drawn_not_enforced" if site.entrances else "future"),
         "pedestrian_and_emergency.pedestrian_routes": _pedestrian_status(site, "pedestrian_routes"),
         "pedestrian_and_emergency.fire_lanes": _pedestrian_status(site, "fire_lanes"),
@@ -361,6 +365,8 @@ def _field_support(site: SiteSpec, layout: LayoutResult | None) -> dict[str, str
         "optimization.operational_narrow_two_way_issue_risk": "available" if layout else "future",
         "optimization.operational_max_narrow_two_way_stall_ratio": "available" if layout else "future",
         "optimization.operational_narrow_two_way_stall_ratio_risk": "available" if layout else "future",
+        "optimization.operational_min_passing_bays": "available" if layout else "future",
+        "optimization.operational_passing_bay_shortage_risk": "available" if layout else "future",
         "optimization.candidate_layout_preview": "active" if layout and layout.candidate_layout_preview else "future",
         "optimization.candidate_layout_preview_scoring": "active" if _layout_preview_comparison(layout) else "future",
         "optimization.promote_candidate_layout_preview": _candidate_layout_promotion_status(layout),
