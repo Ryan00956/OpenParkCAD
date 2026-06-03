@@ -1314,6 +1314,32 @@ Current rules:
   conflicts. It only annotates the current aisle-axis gap proxy with known
   entrance anchors.
 
+### Phase 5O: Aisle-Junction Endpoint Anchors
+
+Meeting-risk segment anchors now identify aisle endpoints that touch another
+generated aisle.
+
+Current rules:
+
+- Entrance endpoints still take precedence and remain `entrance_throat`.
+- If a non-entrance aisle endpoint touches another generated non-turnaround
+  aisle polygon, the endpoint is classified as `aisle_junction`.
+- Gap network segment types now include:
+  - `junction_to_terminal`
+  - `junction_to_refuge`
+  - `junction_to_junction`
+  - `entrance_to_junction`
+- Meeting risk issues now include:
+  - `junction_to_terminal_gap_exceeds_limit`
+  - `junction_to_refuge_gap_exceeds_limit`
+  - `junction_to_junction_gap_exceeds_limit`
+  - `entrance_to_junction_gap_exceeds_limit`
+- `operational_quality.narrow_two_way_summary.junction_meeting_trap_count`
+  summarizes meeting risks that involve an aisle junction.
+- This detects branch-side endpoints that attach to a parent aisle. It still
+  does not add mid-aisle junction anchors on the parent aisle centerline; that
+  is the next step before branch merge priority can be reasoned about.
+
 ## Implementation Principle
 
 Keep these layers separate in code:

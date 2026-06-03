@@ -68,7 +68,7 @@ def operational_quality_report(layout: LayoutResult) -> dict[str, Any]:
     if narrow_two_way_risk_score:
         warnings.append(f"{narrow_two_way_risk_score:g} narrow two-way operational risk score is reported")
     return {
-        "version": "phase5n-1",
+        "version": "phase5o-1",
         "status": "active_failed" if not valid else "report_only",
         "mode": mode,
         "valid": valid,
@@ -453,7 +453,7 @@ def _narrow_two_way_risk_reports(layout: LayoutResult) -> dict[str, Any]:
             min_passing_bays,
         )
         return {
-            "version": "phase5n-1",
+            "version": "phase5o-1",
             "status": "not_applicable",
             "risk_count": 0,
             "risk_score": 0.0,
@@ -498,6 +498,7 @@ def _narrow_two_way_risk_reports(layout: LayoutResult) -> dict[str, Any]:
         max_passing_bay_spacing,
         passing_bay_spacing_risk,
         layout.site,
+        layout.aisles,
     )
     meeting_risks = _narrow_two_way_meeting_risks(
         passing_bay_spacing_reports,
@@ -564,7 +565,7 @@ def _narrow_two_way_risk_reports(layout: LayoutResult) -> dict[str, Any]:
     )
     summary_risk_score = sum(float(item["risk_score"]) for item in summary_risks)
     return {
-        "version": "phase5n-1",
+        "version": "phase5o-1",
         "status": "active",
         "risk_count": (
             len([item for item in stall_issues if float(item["risk_score"]) > 0])
@@ -652,6 +653,7 @@ def _narrow_two_way_summary(
         "full_aisle_meeting_risk_count": meeting_risk_counts.get("full_aisle_without_meeting_refuge", 0),
         "endpoint_meeting_trap_count": _endpoint_meeting_risk_count(meeting_risk_counts),
         "entrance_meeting_trap_count": _entrance_meeting_risk_count(meeting_risk_counts),
+        "junction_meeting_trap_count": _junction_meeting_risk_count(meeting_risk_counts),
         "mid_segment_meeting_risk_count": meeting_risk_counts.get("refuge_to_refuge_gap_exceeds_limit", 0),
         "meeting_risk_counts": meeting_risk_counts,
         "min_passing_bays": min_passing_bays,
@@ -914,6 +916,7 @@ def _passing_bay_spacing_reports(
     max_spacing: float | None,
     spacing_risk: float,
     site: SiteSpec,
+    all_aisles: list[ParkingAisle],
 ) -> list[dict[str, Any]]:
     reports: list[dict[str, Any]] = []
     usable_by_aisle: dict[str, list[dict[str, Any]]] = {}
@@ -945,7 +948,7 @@ def _passing_bay_spacing_reports(
             continue
         assigned = usable_by_aisle.get(aisle.id, [])
         projected = _project_passing_bays(axis, assigned)
-        anchors = _passing_bay_spacing_anchors(axis, aisle, projected, site)
+        anchors = _passing_bay_spacing_anchors(axis, aisle, projected, site, all_aisles)
         gaps = _passing_bay_spacing_gaps(anchors, max_spacing)
         longest_gap = max((gap["length"] for gap in gaps), default=float(axis.length))
         exceeded_gap_count = sum(1 for gap in gaps if gap["exceeds_limit"])
@@ -1021,8 +1024,16 @@ def _meeting_issue_for_gap(gap: dict[str, Any]) -> str:
     network_segment_type = gap.get("network_segment_type")
     if network_segment_type == "entrance_to_terminal":
         return "entrance_to_terminal_without_meeting_refuge"
+    if network_segment_type == "entrance_to_junction":
+        return "entrance_to_junction_gap_exceeds_limit"
     if network_segment_type == "entrance_to_refuge":
         return "entrance_to_refuge_gap_exceeds_limit"
+    if network_segment_type == "junction_to_terminal":
+        return "junction_to_terminal_gap_exceeds_limit"
+    if network_segment_type == "junction_to_refuge":
+        return "junction_to_refuge_gap_exceeds_limit"
+    if network_segment_type == "junction_to_junction":
+        return "junction_to_junction_gap_exceeds_limit"
     if network_segment_type == "terminal_to_refuge":
         return "terminal_to_refuge_gap_exceeds_limit"
     segment_type = gap.get("segment_type")
@@ -1036,8 +1047,9 @@ def _passing_bay_spacing_anchors(
     aisle: ParkingAisle,
     projected: list[dict[str, Any]],
     site: SiteSpec,
+    all_aisles: list[ParkingAisle],
 ) -> list[dict[str, Any]]:
-    endpoint_context = _aisle_endpoint_context(axis, aisle, site)
+    endpoint_context = _aisle_endpoint_context(axis, aisle, site, all_aisles)
     anchors = [
         {
             "kind": "aisle_endpoint",
@@ -1068,7 +1080,12 @@ def _passing_bay_spacing_anchors(
     return sorted(deduped.values(), key=lambda item: item["position_along_aisle"])
 
 
-def _aisle_endpoint_context(axis, aisle: ParkingAisle, site: SiteSpec) -> dict[str, dict[str, Any]]:
+def _aisle_endpoint_context(
+    axis,
+    aisle: ParkingAisle,
+    site: SiteSpec,
+    all_aisles: list[ParkingAisle],
+) -> dict[str, dict[str, Any]]:
     context = {
         "start": {
             "network_kind": "aisle_terminal",
@@ -1088,7 +1105,31 @@ def _aisle_endpoint_context(axis, aisle: ParkingAisle, site: SiteSpec) -> dict[s
                 "network_kind": "entrance_throat",
                 "network_id": entrance.id,
             }
+    for key, point in (
+        ("start", ShapelyPoint(axis.coords[0])),
+        ("end", ShapelyPoint(axis.coords[-1])),
+    ):
+        if context[key]["network_kind"] == "entrance_throat":
+            continue
+        junction_ids = _endpoint_junction_aisle_ids(point, aisle, all_aisles)
+        if junction_ids:
+            context[key] = {
+                "network_kind": "aisle_junction",
+                "network_id": ",".join(junction_ids),
+            }
     return context
+
+
+def _endpoint_junction_aisle_ids(point: ShapelyPoint, aisle: ParkingAisle, all_aisles: list[ParkingAisle]) -> list[str]:
+    junction_ids: list[str] = []
+    for other in all_aisles:
+        if other.id == aisle.id:
+            continue
+        if other.role == "turnaround":
+            continue
+        if point.distance(ShapelyPolygon(other.polygon)) <= 1e-6:
+            junction_ids.append(other.id)
+    return sorted(junction_ids)
 
 
 def _passing_bay_spacing_gaps(
@@ -1134,10 +1175,18 @@ def _passing_bay_gap_network_type(left: dict[str, Any], right: dict[str, Any]) -
     kinds = {left["network_kind"], right["network_kind"]}
     if kinds == {"aisle_terminal"}:
         return "terminal_to_terminal"
+    if kinds == {"aisle_junction"}:
+        return "junction_to_junction"
     if "entrance_throat" in kinds and "passing_bay_refuge" in kinds:
         return "entrance_to_refuge"
+    if "entrance_throat" in kinds and "aisle_junction" in kinds:
+        return "entrance_to_junction"
     if "entrance_throat" in kinds and "aisle_terminal" in kinds:
         return "entrance_to_terminal"
+    if "aisle_junction" in kinds and "passing_bay_refuge" in kinds:
+        return "junction_to_refuge"
+    if "aisle_junction" in kinds and "aisle_terminal" in kinds:
+        return "junction_to_terminal"
     if "aisle_terminal" in kinds and "passing_bay_refuge" in kinds:
         return "terminal_to_refuge"
     return "refuge_to_refuge"
@@ -1563,6 +1612,10 @@ def _endpoint_meeting_risk_count(counts: dict[str, int]) -> int:
             "entrance_to_refuge_gap_exceeds_limit",
             "terminal_to_refuge_gap_exceeds_limit",
             "entrance_to_terminal_without_meeting_refuge",
+            "entrance_to_junction_gap_exceeds_limit",
+            "junction_to_terminal_gap_exceeds_limit",
+            "junction_to_refuge_gap_exceeds_limit",
+            "junction_to_junction_gap_exceeds_limit",
         )
     )
 
@@ -1573,6 +1626,18 @@ def _entrance_meeting_risk_count(counts: dict[str, int]) -> int:
         for issue in (
             "entrance_to_refuge_gap_exceeds_limit",
             "entrance_to_terminal_without_meeting_refuge",
+        )
+    )
+
+
+def _junction_meeting_risk_count(counts: dict[str, int]) -> int:
+    return sum(
+        counts.get(issue, 0)
+        for issue in (
+            "entrance_to_junction_gap_exceeds_limit",
+            "junction_to_terminal_gap_exceeds_limit",
+            "junction_to_refuge_gap_exceeds_limit",
+            "junction_to_junction_gap_exceeds_limit",
         )
     )
 
