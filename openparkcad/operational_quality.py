@@ -14,10 +14,12 @@ def operational_quality_report(layout: LayoutResult) -> dict[str, Any]:
     junctions = _junction_reports(layout)
     entrance_throats = _entrance_throat_reports(layout)
     route_risks = _route_risk_reports(layout)
+    directionality_risks = _directionality_risk_reports(layout)
     junction_conflicts = sum(len(item["conflicting_stalls"]) for item in junctions)
     entrance_conflicts = sum(len(item["conflicting_stalls"]) for item in entrance_throats)
     route_risk_score = float(route_risks["risk_score"])
-    risk_score = float(junction_conflicts + entrance_conflicts + route_risk_score)
+    directionality_risk_score = float(directionality_risks["risk_score"])
+    risk_score = float(junction_conflicts + entrance_conflicts + route_risk_score + directionality_risk_score)
     mode = _operational_quality_mode(layout.site)
     max_allowed_risk_score = _max_allowed_risk_score(layout.site)
     risk_exceeds_limit = (
@@ -25,7 +27,7 @@ def operational_quality_report(layout: LayoutResult) -> dict[str, Any]:
         and risk_score > max_allowed_risk_score + 1e-9
     )
     blocking_conflicts = (
-        _blocking_conflicts(junctions, entrance_throats, route_risks)
+        _blocking_conflicts(junctions, entrance_throats, route_risks, directionality_risks)
         if mode in {"promotion_gate", "hard_reject"} and risk_exceeds_limit
         else []
     )
@@ -46,8 +48,10 @@ def operational_quality_report(layout: LayoutResult) -> dict[str, Any]:
         )
     if route_risk_score:
         warnings.append(f"{route_risk_score:g} route-level operational risk score is reported")
+    if directionality_risk_score:
+        warnings.append(f"{directionality_risk_score:g} directionality operational risk score is reported")
     return {
-        "version": "phase5f-1",
+        "version": "phase5g-1",
         "status": "active_failed" if not valid else "report_only",
         "mode": mode,
         "valid": valid,
@@ -64,10 +68,15 @@ def operational_quality_report(layout: LayoutResult) -> dict[str, Any]:
         "route_risk_count": route_risks["risk_count"],
         "route_summary": route_risks["summary"],
         "route_summary_risks": route_risks["summary_risks"],
+        "directionality_risk_score": directionality_risk_score,
+        "directionality_risk_count": directionality_risks["risk_count"],
+        "directionality_summary": directionality_risks["summary"],
+        "directionality_summary_risks": directionality_risks["summary_risks"],
         "warnings": warnings,
         "junctions": junctions,
         "entrance_throats": entrance_throats,
         "route_risks": route_risks,
+        "directionality_risks": directionality_risks,
     }
 
 
@@ -311,6 +320,166 @@ def _route_risk_reports(layout: LayoutResult) -> dict[str, Any]:
     }
 
 
+def _directionality_risk_reports(layout: LayoutResult) -> dict[str, Any]:
+    graph = build_traffic_graph(layout)
+    entry_nodes = {_entrance_node_id(entrance.id) for entrance in layout.site.entrances if _allows_entry(entrance)}
+    exit_nodes = {_entrance_node_id(entrance.id) for entrance in layout.site.entrances if _allows_exit(entrance)}
+    issue_risk = _nonnegative_float(
+        layout.site.optimization.get("operational_directionality_issue_risk", 0.0),
+        0.0,
+    )
+    max_issue_ratio = _optional_ratio(layout.site.optimization.get("operational_max_directionality_issue_ratio"))
+    issue_ratio_risk = _nonnegative_float(
+        layout.site.optimization.get("operational_directionality_issue_ratio_risk", 1.0),
+        1.0,
+    )
+    if not entry_nodes or not exit_nodes:
+        summary = _directionality_summary([], [], len(graph.stall_access))
+        return {
+            "version": "phase5g-1",
+            "status": "not_checked_no_entrance_or_exit",
+            "risk_count": 0,
+            "risk_score": 0.0,
+            "stall_issue_risk_score": 0.0,
+            "summary_risk_score": 0.0,
+            "directionality_issue_risk": issue_risk,
+            "max_directionality_issue_ratio": max_issue_ratio,
+            "directionality_issue_ratio_risk": issue_ratio_risk,
+            "summary": summary,
+            "summary_risks": [],
+            "node_issues": [],
+            "stall_issues": [],
+        }
+
+    reachable_from_entries = _reachable_node_ids(graph.edges, entry_nodes, reverse=False)
+    can_reach_exits = _reachable_node_ids(graph.edges, exit_nodes, reverse=True)
+    node_issues = _directionality_node_issues(graph, reachable_from_entries, can_reach_exits)
+    node_issue_by_id = {item["node_id"]: item for item in node_issues}
+    stall_issues = _directionality_stall_issues(graph.stall_access, node_issue_by_id, issue_risk)
+    stall_issue_risk_score = sum(float(item["risk_score"]) for item in stall_issues)
+    summary = _directionality_summary(node_issues, stall_issues, len(graph.stall_access))
+    summary_risks = _directionality_summary_risks(summary, max_issue_ratio, issue_ratio_risk)
+    summary_risk_score = sum(float(item["risk_score"]) for item in summary_risks)
+    return {
+        "version": "phase5g-1",
+        "status": "active",
+        "risk_count": len([item for item in stall_issues if float(item["risk_score"]) > 0]) + len(summary_risks),
+        "risk_score": float(stall_issue_risk_score + summary_risk_score),
+        "stall_issue_risk_score": float(stall_issue_risk_score),
+        "summary_risk_score": float(summary_risk_score),
+        "directionality_issue_risk": issue_risk,
+        "max_directionality_issue_ratio": max_issue_ratio,
+        "directionality_issue_ratio_risk": issue_ratio_risk,
+        "summary": summary,
+        "summary_risks": summary_risks,
+        "node_issues": node_issues,
+        "stall_issues": stall_issues,
+    }
+
+
+def _directionality_node_issues(graph, reachable_from_entries: set[str], can_reach_exits: set[str]) -> list[dict[str, Any]]:
+    issues: list[dict[str, Any]] = []
+    for node in graph.nodes:
+        if node.kind == "entrance":
+            continue
+        reachable = node.id in reachable_from_entries
+        can_exit = node.id in can_reach_exits
+        issue = None
+        if reachable and not can_exit:
+            issue = "one_way_trap"
+        elif can_exit and not reachable:
+            issue = "exit_only_fragment"
+        elif not reachable and not can_exit:
+            issue = "isolated_directional_fragment"
+        if issue is None:
+            continue
+        issues.append(
+            {
+                "node_id": node.id,
+                "aisle_id": node.ref_id,
+                "node_kind": node.kind,
+                "issue": issue,
+                "reachable_from_entry": reachable,
+                "can_reach_exit": can_exit,
+            }
+        )
+    return issues
+
+
+def _directionality_stall_issues(stall_access, node_issue_by_id: dict[str, dict[str, Any]], issue_risk: float) -> list[dict[str, Any]]:
+    issues: list[dict[str, Any]] = []
+    for access in stall_access:
+        if not access.aisle_node_id or access.aisle_node_id not in node_issue_by_id:
+            continue
+        node_issue = node_issue_by_id[access.aisle_node_id]
+        issues.append(
+            {
+                "stall_id": access.stall_id,
+                "aisle_id": access.aisle_id,
+                "aisle_node_id": access.aisle_node_id,
+                "issue": f"stall_on_{node_issue['issue']}",
+                "node_issue": node_issue["issue"],
+                "risk_score": float(issue_risk),
+            }
+        )
+    return issues
+
+
+def _directionality_summary(node_issues: list[dict[str, Any]], stall_issues: list[dict[str, Any]], checked_stall_count: int) -> dict[str, Any]:
+    node_issue_counts = _issue_counts(node_issues)
+    stall_issue_counts = _issue_counts(stall_issues)
+    stall_issue_count = len(stall_issues)
+    return {
+        "checked_stall_count": checked_stall_count,
+        "node_issue_count": len(node_issues),
+        "stall_issue_count": stall_issue_count,
+        "stall_issue_ratio": float(stall_issue_count / checked_stall_count) if checked_stall_count else 0.0,
+        "one_way_trap_node_count": node_issue_counts.get("one_way_trap", 0),
+        "exit_only_fragment_node_count": node_issue_counts.get("exit_only_fragment", 0),
+        "isolated_directional_fragment_node_count": node_issue_counts.get("isolated_directional_fragment", 0),
+        "stall_on_one_way_trap_count": stall_issue_counts.get("stall_on_one_way_trap", 0),
+        "stall_on_exit_only_fragment_count": stall_issue_counts.get("stall_on_exit_only_fragment", 0),
+        "stall_on_isolated_directional_fragment_count": stall_issue_counts.get("stall_on_isolated_directional_fragment", 0),
+        "node_issue_counts": node_issue_counts,
+        "stall_issue_counts": stall_issue_counts,
+    }
+
+
+def _directionality_summary_risks(
+    summary: dict[str, Any],
+    max_issue_ratio: float | None,
+    issue_ratio_risk: float,
+) -> list[dict[str, Any]]:
+    ratio = summary.get("stall_issue_ratio")
+    if (
+        max_issue_ratio is not None
+        and isinstance(ratio, int | float)
+        and float(ratio) > max_issue_ratio + 1e-9
+    ):
+        return [
+            {
+                "id": "OQ-DIRECTIONALITY-STALL-ISSUE-RATIO",
+                "issue": "directionality_stall_issue_ratio_exceeds_limit",
+                "stall_issue_ratio": float(ratio),
+                "max_directionality_issue_ratio": max_issue_ratio,
+                "stall_issue_count": summary["stall_issue_count"],
+                "checked_stall_count": summary["checked_stall_count"],
+                "risk_score": float(issue_ratio_risk),
+            }
+        ]
+    return []
+
+
+def _issue_counts(items: list[dict[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for item in items:
+        issue = item.get("issue")
+        if issue is None:
+            continue
+        counts[str(issue)] = counts.get(str(issue), 0) + 1
+    return counts
+
+
 def _route_summary(routes: list[dict[str, Any]]) -> dict[str, Any]:
     finite_routes = [
         route
@@ -433,6 +602,30 @@ def _weighted_adjacency(edges, node_points: dict[str, tuple[float, float]], reve
     return reversed_adjacency
 
 
+def _reachable_node_ids(edges, starts: set[str], reverse: bool) -> set[str]:
+    adjacency: dict[str, set[str]] = {}
+    for edge in edges:
+        _add_arc(adjacency, edge.from_node_id, edge.to_node_id)
+        if edge.directionality == "two_way":
+            _add_arc(adjacency, edge.to_node_id, edge.from_node_id)
+    if reverse:
+        reversed_adjacency: dict[str, set[str]] = {}
+        for source, targets in adjacency.items():
+            for target in targets:
+                _add_arc(reversed_adjacency, target, source)
+        adjacency = reversed_adjacency
+
+    seen: set[str] = set()
+    stack = list(starts)
+    while stack:
+        node_id = stack.pop()
+        if node_id in seen:
+            continue
+        seen.add(node_id)
+        stack.extend(sorted(adjacency.get(node_id, set()) - seen))
+    return seen
+
+
 def _shortest_distances(adjacency: dict[str, list[tuple[str, float]]], starts: set[str]) -> dict[str, float]:
     distances: dict[str, float] = {}
     heap: list[tuple[float, str]] = []
@@ -461,6 +654,10 @@ def _edge_weight(source: str, target: str, node_points: dict[str, tuple[float, f
 
 def _add_weighted_arc(adjacency: dict[str, list[tuple[str, float]]], source: str, target: str, weight: float) -> None:
     adjacency.setdefault(source, []).append((target, weight))
+
+
+def _add_arc(adjacency: dict[str, set[str]], source: str, target: str) -> None:
+    adjacency.setdefault(source, set()).add(target)
 
 
 def _finite_distance(value: float | None) -> float | None:
@@ -534,6 +731,7 @@ def _blocking_conflicts(
     junctions: list[dict[str, Any]],
     entrance_throats: list[dict[str, Any]],
     route_risks: dict[str, Any],
+    directionality_risks: dict[str, Any],
 ) -> list[dict[str, Any]]:
     conflicts: list[dict[str, Any]] = []
     for junction in junctions:
@@ -568,6 +766,8 @@ def _blocking_conflicts(
         conflicts.append(route)
     for summary_risk in _route_summary_conflicts(route_risks):
         conflicts.append(summary_risk)
+    for directionality in _directionality_conflicts(directionality_risks):
+        conflicts.append(directionality)
     return conflicts
 
 
@@ -630,6 +830,45 @@ def _route_summary_conflicts(route_risks: dict[str, Any]) -> list[dict[str, Any]
             if key in item:
                 conflict[key] = item[key]
         conflicts.append(conflict)
+    return conflicts
+
+
+def _directionality_conflicts(directionality_risks: dict[str, Any]) -> list[dict[str, Any]]:
+    conflicts = []
+    raw_stalls = directionality_risks.get("stall_issues", [])
+    if isinstance(raw_stalls, list):
+        for item in raw_stalls:
+            if not isinstance(item, dict) or float(item.get("risk_score", 0.0)) <= 0:
+                continue
+            conflicts.append(
+                {
+                    "source_type": "directionality_stall",
+                    "source_id": f"OQ-DIRECTIONALITY-{item['stall_id']}",
+                    "stall_id": item["stall_id"],
+                    "aisle_id": item["aisle_id"],
+                    "aisle_node_id": item["aisle_node_id"],
+                    "issue": item["issue"],
+                    "node_issue": item["node_issue"],
+                    "risk_score": item["risk_score"],
+                }
+            )
+    raw_summary = directionality_risks.get("summary_risks", [])
+    if isinstance(raw_summary, list):
+        for item in raw_summary:
+            if not isinstance(item, dict):
+                continue
+            conflicts.append(
+                {
+                    "source_type": "directionality_summary",
+                    "source_id": item["id"],
+                    "issue": item["issue"],
+                    "stall_issue_ratio": item["stall_issue_ratio"],
+                    "max_directionality_issue_ratio": item["max_directionality_issue_ratio"],
+                    "stall_issue_count": item["stall_issue_count"],
+                    "checked_stall_count": item["checked_stall_count"],
+                    "risk_score": item["risk_score"],
+                }
+            )
     return conflicts
 
 

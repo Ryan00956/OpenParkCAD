@@ -1115,6 +1115,34 @@ Current rules:
   circulate through, even if no single local junction rule fails.
 - This is still graph-distance analysis, not vehicle trajectory simulation.
 
+### Phase 5G: Directionality Trap Risk Report
+
+Operational quality now checks the directed traffic graph for one-way and
+directionality traps.
+
+Current rules:
+
+- The checker reuses the Phase 2 traffic graph and its directed edges.
+- A non-entrance aisle node that is reachable from an entry-capable entrance
+  but cannot reach any exit-capable entrance is reported as `one_way_trap`.
+- A non-entrance aisle node that can reach an exit but cannot be reached from
+  an entry is reported as `exit_only_fragment`.
+- A non-entrance aisle node with neither entry reachability nor exit path is
+  reported as `isolated_directional_fragment`.
+- Stalls served by those nodes are reported in
+  `operational_quality.directionality_risks.stall_issues`.
+- `optimization.operational_directionality_issue_risk` can assign risk per
+  affected stall. It defaults to zero, so existing layouts remain diagnostic
+  unless configured.
+- `optimization.operational_max_directionality_issue_ratio` can gate on the
+  share of affected stalls.
+- `optimization.operational_directionality_issue_ratio_risk` controls the risk
+  score for the ratio gate and defaults to 1.0.
+- Directionality risks contribute to `operational_quality.risk_score`, so the
+  existing `score_only`, `promotion_gate`, and `hard_reject` modes apply.
+- This is not narrow two-way head-to-head detection yet. It is the first
+  directed-graph circulation trap check.
+
 ## Implementation Principle
 
 Keep these layers separate in code:

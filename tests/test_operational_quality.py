@@ -1,4 +1,4 @@
-from openparkcad.models import EntranceSpec, LayoutResult, ParkingAisle, ParkingStall, SiteSpec, StallSpec
+from openparkcad.models import AisleClassSpec, EntranceSpec, LayoutResult, ParkingAisle, ParkingStall, SiteSpec, StallSpec
 from openparkcad.operational_quality import operational_quality_report
 from openparkcad.scoring import score_layout
 
@@ -88,10 +88,66 @@ def _route_layout(optimization: dict | None = None) -> LayoutResult:
     )
 
 
-def test_phase5f_operational_quality_reports_junction_stall_conflicts():
+def _directional_trap_layout(optimization: dict | None = None) -> LayoutResult:
+    site = SiteSpec(
+        name="directional-trap",
+        boundary=[(0, 0), (30, 0), (30, 18), (0, 18)],
+        stall=StallSpec(width=2.5, length=5.0, allowed_angles=(90.0,)),
+        aisle_width=6.0,
+        margin=0.0,
+        entrances=[
+            EntranceSpec(
+                id="entry",
+                mode="entry_only",
+                center=(0, 7),
+                width=7.0,
+                heading_degrees=0.0,
+            ),
+            EntranceSpec(
+                id="exit",
+                mode="exit_only",
+                center=(30, 7),
+                width=7.0,
+                heading_degrees=180.0,
+            )
+        ],
+        aisle_classes=[
+            AisleClassSpec(
+                id="wide-one-way",
+                width=6.0,
+                directionality="one_way",
+            )
+        ],
+        fixed_aisle_class="wide-one-way",
+        optimization=optimization or {},
+    )
+    return LayoutResult(
+        site=site,
+        aisles=[
+            ParkingAisle(
+                id="A-MAIN",
+                polygon=[(0, 4), (20, 4), (20, 10), (0, 10)],
+                angle_degrees=0.0,
+                role="main",
+                connected_to_entrance_id="entry",
+            )
+        ],
+        stalls=[
+            ParkingStall(
+                id="P-DIR-001",
+                polygon=[(8, 10), (10.5, 10), (10.5, 15), (8, 15)],
+                angle_degrees=90.0,
+                served_by_aisle_id="A-MAIN",
+                aisle_side="left",
+            )
+        ],
+    )
+
+
+def test_phase5g_operational_quality_reports_junction_stall_conflicts():
     report = operational_quality_report(_quality_layout())
 
-    assert report["version"] == "phase5f-1"
+    assert report["version"] == "phase5g-1"
     assert report["status"] == "report_only"
     assert report["mode"] == "score_only"
     assert report["valid"] is True
@@ -99,14 +155,16 @@ def test_phase5f_operational_quality_reports_junction_stall_conflicts():
     assert report["junction_conflict_count"] == 1
     assert report["risk_score"] == 1.0
     assert report["route_risk_score"] == 0.0
+    assert report["directionality_risk_score"] == 0.0
     assert report["route_summary"]["checked_stall_count"] == 0
+    assert report["directionality_summary"]["checked_stall_count"] == 1
     assert report["route_summary_risks"] == []
     assert report["promotion_blockers"] == []
     assert report["blocking_conflicts"] == []
     assert report["junctions"][0]["conflicting_stalls"][0]["stall_id"] == "P-001"
 
 
-def test_phase5f_operational_quality_reports_route_lengths_without_default_penalty():
+def test_phase5g_operational_quality_reports_route_lengths_without_default_penalty():
     report = operational_quality_report(_route_layout())
 
     assert report["route_risks"]["status"] == "active"
@@ -136,7 +194,59 @@ def test_phase5f_operational_quality_reports_route_lengths_without_default_penal
     assert route["issues"] == []
 
 
-def test_phase5f_operational_route_risk_can_gate_promotion():
+def test_phase5g_operational_directionality_reports_trap_without_default_penalty():
+    report = operational_quality_report(_directional_trap_layout())
+
+    assert report["directionality_risks"]["status"] == "active"
+    assert report["directionality_risks"]["version"] == "phase5g-1"
+    assert report["directionality_risk_score"] == 0.0
+    assert report["directionality_summary"]["node_issue_count"] == 1
+    assert report["directionality_summary"]["stall_issue_count"] == 1
+    assert report["directionality_summary"]["stall_issue_ratio"] == 1.0
+    assert report["directionality_summary"]["one_way_trap_node_count"] == 1
+    assert report["directionality_risks"]["node_issues"][0]["issue"] == "one_way_trap"
+    assert report["directionality_risks"]["stall_issues"][0]["issue"] == "stall_on_one_way_trap"
+    assert report["directionality_summary_risks"] == []
+
+
+def test_phase5g_operational_directionality_issue_can_gate_promotion():
+    layout = _directional_trap_layout(
+        {
+            "operational_quality_mode": "promotion_gate",
+            "operational_max_risk_score": 0,
+            "operational_directionality_issue_risk": 1,
+            "operational_missing_route_risk": 0,
+        }
+    )
+
+    report = operational_quality_report(layout)
+
+    assert report["directionality_risk_score"] == 1.0
+    assert report["promotion_blockers"] == ["operational_quality_risk_exceeds_limit"]
+    conflict = next(item for item in report["blocking_conflicts"] if item["source_type"] == "directionality_stall")
+    assert conflict["stall_id"] == "P-DIR-001"
+    assert conflict["issue"] == "stall_on_one_way_trap"
+
+
+def test_phase5g_operational_directionality_issue_ratio_can_gate_promotion():
+    layout = _directional_trap_layout(
+        {
+            "operational_quality_mode": "promotion_gate",
+            "operational_max_risk_score": 0,
+            "operational_max_directionality_issue_ratio": 0.5,
+            "operational_missing_route_risk": 0,
+        }
+    )
+
+    report = operational_quality_report(layout)
+
+    assert report["directionality_risk_score"] == 1.0
+    assert report["directionality_summary_risks"][0]["issue"] == "directionality_stall_issue_ratio_exceeds_limit"
+    conflict = next(item for item in report["blocking_conflicts"] if item["source_type"] == "directionality_summary")
+    assert conflict["stall_issue_ratio"] == 1.0
+
+
+def test_phase5g_operational_route_risk_can_gate_promotion():
     layout = _route_layout(
         {
             "operational_quality_mode": "promotion_gate",
@@ -158,7 +268,7 @@ def test_phase5f_operational_route_risk_can_gate_promotion():
     assert route_conflict["issues"] == ["route_length_exceeds_limit"]
 
 
-def test_phase5f_operational_turnaround_dependency_ratio_can_gate_promotion():
+def test_phase5g_operational_turnaround_dependency_ratio_can_gate_promotion():
     layout = _route_layout(
         {
             "operational_quality_mode": "promotion_gate",
@@ -179,7 +289,7 @@ def test_phase5f_operational_turnaround_dependency_ratio_can_gate_promotion():
     assert summary_conflict["issue"] == "turnaround_dependency_ratio_exceeds_limit"
 
 
-def test_phase5f_operational_average_route_length_can_gate_promotion():
+def test_phase5g_operational_average_route_length_can_gate_promotion():
     layout = _route_layout(
         {
             "operational_quality_mode": "promotion_gate",
@@ -198,7 +308,7 @@ def test_phase5f_operational_average_route_length_can_gate_promotion():
     assert summary_conflict["issue"] == "average_route_length_exceeds_limit"
 
 
-def test_phase5f_operational_long_route_ratio_can_gate_promotion():
+def test_phase5g_operational_long_route_ratio_can_gate_promotion():
     layout = _route_layout(
         {
             "operational_quality_mode": "promotion_gate",
@@ -221,7 +331,7 @@ def test_phase5f_operational_long_route_ratio_can_gate_promotion():
     assert summary_conflict["issue"] == "long_route_ratio_exceeds_limit"
 
 
-def test_phase5f_operational_quality_score_only_does_not_block_with_limit():
+def test_phase5g_operational_quality_score_only_does_not_block_with_limit():
     site = SiteSpec(
         name="operational-score-only",
         boundary=[(0, 0), (24, 0), (24, 24), (0, 24)],
@@ -242,7 +352,7 @@ def test_phase5f_operational_quality_score_only_does_not_block_with_limit():
     assert report["blocking_conflicts"] == []
 
 
-def test_phase5f_operational_quality_promotion_gate_reports_blockers():
+def test_phase5g_operational_quality_promotion_gate_reports_blockers():
     site = SiteSpec(
         name="operational-gate",
         boundary=[(0, 0), (24, 0), (24, 24), (0, 24)],
@@ -263,7 +373,7 @@ def test_phase5f_operational_quality_promotion_gate_reports_blockers():
     assert report["blocking_conflicts"][0]["stall_id"] == "P-001"
 
 
-def test_phase5f_operational_quality_hard_reject_marks_layout_invalid():
+def test_phase5g_operational_quality_hard_reject_marks_layout_invalid():
     site = SiteSpec(
         name="operational-hard-reject",
         boundary=[(0, 0), (24, 0), (24, 24), (0, 24)],
@@ -283,7 +393,7 @@ def test_phase5f_operational_quality_hard_reject_marks_layout_invalid():
     assert report["promotion_blockers"] == ["operational_quality_risk_exceeds_limit"]
 
 
-def test_phase5f_operational_risk_penalty_is_scoreable():
+def test_phase5g_operational_risk_penalty_is_scoreable():
     site = SiteSpec(
         name="operational-risk-score",
         boundary=[(0, 0), (24, 0), (24, 24), (0, 24)],
