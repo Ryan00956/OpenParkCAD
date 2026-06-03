@@ -1218,8 +1218,31 @@ Current rules:
   remain diagnostic unless configured.
 - `optimization.operational_min_passing_bays` now counts usable passing bays,
   not raw marker count.
-- This still does not verify passing bay spacing along a long narrow two-way
-  aisle, line-of-sight, priority rules, or head-to-head vehicle simulation.
+- This still does not verify line-of-sight, priority rules, queueing, or
+  head-to-head vehicle simulation.
+
+### Phase 5K: Passing Bay Spacing Report
+
+Passing bay reports now include a first aisle-level spacing check for narrow
+two-way aisles.
+
+Current rules:
+
+- Each generated narrow two-way aisle gets an approximate centerline from the
+  long axis of its aisle polygon.
+- Usable passing bays are projected onto the associated aisle centerline.
+- The checker measures the gaps between aisle endpoints and projected passing
+  bay positions.
+- `operational_quality.narrow_two_way_summary.longest_passing_bay_gap`
+  reports the largest unserved gap across checked narrow two-way aisles.
+- `optimization.operational_max_passing_bay_spacing` can set the maximum
+  allowed gap between an aisle endpoint or passing bay and the next passing bay
+  or endpoint.
+- `optimization.operational_passing_bay_spacing_risk` controls the risk score
+  for each aisle whose longest gap exceeds that limit and defaults to 1.0.
+- This is still an aisle-axis approximation. It does not simulate two vehicles,
+  sight distance, courtesy priority, queueing, or passing bay entry/exit swept
+  paths.
 
 ## Implementation Principle
 
