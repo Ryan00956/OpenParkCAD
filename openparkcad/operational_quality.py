@@ -47,7 +47,7 @@ def operational_quality_report(layout: LayoutResult) -> dict[str, Any]:
     if route_risk_score:
         warnings.append(f"{route_risk_score:g} route-level operational risk score is reported")
     return {
-        "version": "phase5e-1",
+        "version": "phase5f-1",
         "status": "active_failed" if not valid else "report_only",
         "mode": mode,
         "valid": valid,
@@ -178,6 +178,12 @@ def _route_risk_reports(layout: LayoutResult) -> dict[str, Any]:
     max_turnaround_dependency_ratio = _optional_ratio(
         layout.site.optimization.get("operational_max_turnaround_dependency_ratio")
     )
+    max_average_route_length = _optional_nonnegative_float(
+        layout.site.optimization.get("operational_max_average_route_length")
+    )
+    max_long_route_ratio = _optional_ratio(
+        layout.site.optimization.get("operational_max_long_route_ratio")
+    )
     turnaround_dependency_risk = _nonnegative_float(
         layout.site.optimization.get("operational_turnaround_dependency_risk", 0.0),
         0.0,
@@ -186,13 +192,21 @@ def _route_risk_reports(layout: LayoutResult) -> dict[str, Any]:
         layout.site.optimization.get("operational_turnaround_dependency_ratio_risk", 1.0),
         1.0,
     )
+    average_route_length_risk = _nonnegative_float(
+        layout.site.optimization.get("operational_average_route_length_risk", 1.0),
+        1.0,
+    )
+    long_route_ratio_risk = _nonnegative_float(
+        layout.site.optimization.get("operational_long_route_ratio_risk", 1.0),
+        1.0,
+    )
     missing_route_risk = _nonnegative_float(
         layout.site.optimization.get("operational_missing_route_risk", 1.0),
         1.0,
     )
     if not entry_nodes or not exit_nodes:
         return {
-            "version": "phase5e-1",
+            "version": "phase5f-1",
             "status": "not_checked_no_entrance_or_exit",
             "route_length_model": "aisle_node_centroid_graph",
             "checked_stall_count": 0,
@@ -202,8 +216,12 @@ def _route_risk_reports(layout: LayoutResult) -> dict[str, Any]:
             "summary_risk_score": 0.0,
             "max_route_length": max_route_length,
             "max_turnaround_dependency_ratio": max_turnaround_dependency_ratio,
+            "max_average_route_length": max_average_route_length,
+            "max_long_route_ratio": max_long_route_ratio,
             "turnaround_dependency_risk": turnaround_dependency_risk,
             "turnaround_dependency_ratio_risk": turnaround_dependency_ratio_risk,
+            "average_route_length_risk": average_route_length_risk,
+            "long_route_ratio_risk": long_route_ratio_risk,
             "summary": _route_summary([]),
             "summary_risks": [],
             "routes": [],
@@ -264,10 +282,14 @@ def _route_risk_reports(layout: LayoutResult) -> dict[str, Any]:
         summary,
         max_turnaround_dependency_ratio,
         turnaround_dependency_ratio_risk,
+        max_average_route_length,
+        average_route_length_risk,
+        max_long_route_ratio,
+        long_route_ratio_risk,
     )
     summary_risk_score = sum(float(item["risk_score"]) for item in summary_risks)
     return {
-        "version": "phase5e-1",
+        "version": "phase5f-1",
         "status": "active",
         "route_length_model": "aisle_node_centroid_graph",
         "checked_stall_count": len(routes),
@@ -277,8 +299,12 @@ def _route_risk_reports(layout: LayoutResult) -> dict[str, Any]:
         "summary_risk_score": float(summary_risk_score),
         "max_route_length": max_route_length,
         "max_turnaround_dependency_ratio": max_turnaround_dependency_ratio,
+        "max_average_route_length": max_average_route_length,
+        "max_long_route_ratio": max_long_route_ratio,
         "turnaround_dependency_risk": turnaround_dependency_risk,
         "turnaround_dependency_ratio_risk": turnaround_dependency_ratio_risk,
+        "average_route_length_risk": average_route_length_risk,
+        "long_route_ratio_risk": long_route_ratio_risk,
         "summary": summary,
         "summary_risks": summary_risks,
         "routes": routes,
@@ -305,6 +331,7 @@ def _route_summary(routes: list[dict[str, Any]]) -> dict[str, Any]:
             if bool(route.get("depends_on_dead_end_turnaround"))
         ]
     )
+    long_route_count = issue_counts.get("route_length_exceeds_limit", 0)
     return {
         "checked_stall_count": len(routes),
         "route_with_length_count": len(finite_routes),
@@ -322,6 +349,7 @@ def _route_summary(routes: list[dict[str, Any]]) -> dict[str, Any]:
         "missing_entry_path_count": issue_counts.get("missing_entry_path", 0),
         "missing_exit_path_count": issue_counts.get("missing_exit_path", 0),
         "route_length_exceeds_limit_count": issue_counts.get("route_length_exceeds_limit", 0),
+        "long_route_ratio": float(long_route_count / len(routes)) if routes else 0.0,
         "depends_on_dead_end_turnaround_count": issue_counts.get("depends_on_dead_end_turnaround", 0),
         "issue_counts": issue_counts,
     }
@@ -331,6 +359,10 @@ def _route_summary_risks(
     summary: dict[str, Any],
     max_turnaround_dependency_ratio: float | None,
     turnaround_dependency_ratio_risk: float,
+    max_average_route_length: float | None,
+    average_route_length_risk: float,
+    max_long_route_ratio: float | None,
+    long_route_ratio_risk: float,
 ) -> list[dict[str, Any]]:
     risks: list[dict[str, Any]] = []
     ratio = summary.get("turnaround_dependency_ratio")
@@ -348,6 +380,39 @@ def _route_summary_risks(
                 "turnaround_dependency_count": summary["turnaround_dependency_count"],
                 "checked_stall_count": summary["checked_stall_count"],
                 "risk_score": float(turnaround_dependency_ratio_risk),
+            }
+        )
+    average_route_length = summary.get("average_route_length")
+    if (
+        max_average_route_length is not None
+        and isinstance(average_route_length, int | float)
+        and float(average_route_length) > max_average_route_length + 1e-9
+    ):
+        risks.append(
+            {
+                "id": "OQ-ROUTE-SUMMARY-AVERAGE-LENGTH",
+                "issue": "average_route_length_exceeds_limit",
+                "average_route_length": float(average_route_length),
+                "max_average_route_length": max_average_route_length,
+                "checked_stall_count": summary["checked_stall_count"],
+                "risk_score": float(average_route_length_risk),
+            }
+        )
+    long_route_ratio = summary.get("long_route_ratio")
+    if (
+        max_long_route_ratio is not None
+        and isinstance(long_route_ratio, int | float)
+        and float(long_route_ratio) > max_long_route_ratio + 1e-9
+    ):
+        risks.append(
+            {
+                "id": "OQ-ROUTE-SUMMARY-LONG-ROUTE-RATIO",
+                "issue": "long_route_ratio_exceeds_limit",
+                "long_route_ratio": float(long_route_ratio),
+                "max_long_route_ratio": max_long_route_ratio,
+                "route_length_exceeds_limit_count": summary["route_length_exceeds_limit_count"],
+                "checked_stall_count": summary["checked_stall_count"],
+                "risk_score": float(long_route_ratio_risk),
             }
         )
     return risks
@@ -545,18 +610,26 @@ def _route_summary_conflicts(route_risks: dict[str, Any]) -> list[dict[str, Any]
     for item in raw:
         if not isinstance(item, dict):
             continue
-        conflicts.append(
-            {
-                "source_type": "route_summary",
-                "source_id": item["id"],
-                "issue": item["issue"],
-                "turnaround_dependency_ratio": item["turnaround_dependency_ratio"],
-                "max_turnaround_dependency_ratio": item["max_turnaround_dependency_ratio"],
-                "turnaround_dependency_count": item["turnaround_dependency_count"],
-                "checked_stall_count": item["checked_stall_count"],
-                "risk_score": item["risk_score"],
-            }
-        )
+        conflict = {
+            "source_type": "route_summary",
+            "source_id": item["id"],
+            "issue": item["issue"],
+            "risk_score": item["risk_score"],
+        }
+        for key in (
+            "turnaround_dependency_ratio",
+            "max_turnaround_dependency_ratio",
+            "turnaround_dependency_count",
+            "average_route_length",
+            "max_average_route_length",
+            "long_route_ratio",
+            "max_long_route_ratio",
+            "route_length_exceeds_limit_count",
+            "checked_stall_count",
+        ):
+            if key in item:
+                conflict[key] = item[key]
+        conflicts.append(conflict)
     return conflicts
 
 

@@ -1094,6 +1094,27 @@ Current rules:
 - This is not narrow two-way deadlock detection yet. It is a conservative
   circulation-quality gate for excessive dependence on dead-end turnarounds.
 
+### Phase 5F: Long Route Summary Threshold Risks
+
+The route summary can now flag site-wide long-route patterns, not only
+individual over-limit stalls.
+
+Current rules:
+
+- `optimization.operational_max_average_route_length` sets the maximum allowed
+  average route length across checked stalls.
+- `optimization.operational_average_route_length_risk` controls the risk score
+  added when the average route length exceeds that limit. It defaults to 1.0.
+- `optimization.operational_max_long_route_ratio` sets the maximum allowed
+  share of stalls whose route already exceeds `operational_max_route_length`.
+- `optimization.operational_long_route_ratio_risk` controls the risk score
+  added when the long-route ratio exceeds that limit. It defaults to 1.0.
+- These are summary-level risks, so they produce compact `route_summary`
+  blockers instead of one blocker per stall.
+- This lets the tool report and gate layouts that are globally awkward to
+  circulate through, even if no single local junction rule fails.
+- This is still graph-distance analysis, not vehicle trajectory simulation.
+
 ## Implementation Principle
 
 Keep these layers separate in code:

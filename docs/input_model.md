@@ -984,7 +984,11 @@ optimization operational_max_route_length active for Phase 5C route risk thresho
 optimization operational_turnaround_dependency_risk active for Phase 5C turnaround dependency penalty
 optimization operational_max_turnaround_dependency_ratio active for Phase 5E route-summary risk threshold
 optimization operational_turnaround_dependency_ratio_risk active for Phase 5E route-summary risk score
-optimization weights.operational_risk active for Phase 5E soft-risk scoring
+optimization operational_max_average_route_length active for Phase 5F average route threshold
+optimization operational_average_route_length_risk active for Phase 5F average route risk score
+optimization operational_max_long_route_ratio active for Phase 5F long-route ratio threshold
+optimization operational_long_route_ratio_risk active for Phase 5F long-route ratio risk score
+optimization weights.operational_risk active for Phase 5F soft-risk scoring
 optimization weights                    active for Phase 1 scoring
 optimization score breakdown            active in JSON report
 optimization promote_candidate_layout_preview active as guarded opt-in
@@ -994,7 +998,7 @@ report selected_connectors              active, includes removed and added stall
 report traffic_graph validation          active in JSON report
 report maneuver_validation              active in JSON report
 report maneuver_validation rule_counts  active in JSON report
-report operational_quality              active as Phase 5E local, route, and route-summary threshold risk report
+report operational_quality              active as Phase 5F local, route, and route-summary threshold risk report
 report selected_stall_type_id           active in JSON report
 report stall_type_attempts              active in JSON report
 report selected_stall_assignment        active in JSON report
