@@ -1336,9 +1336,35 @@ Current rules:
   - `entrance_to_junction_gap_exceeds_limit`
 - `operational_quality.narrow_two_way_summary.junction_meeting_trap_count`
   summarizes meeting risks that involve an aisle junction.
-- This detects branch-side endpoints that attach to a parent aisle. It still
-  does not add mid-aisle junction anchors on the parent aisle centerline; that
-  is the next step before branch merge priority can be reasoned about.
+- This detects branch-side endpoints that attach to a parent aisle. Parent-side
+  mid-aisle junction anchors are handled in Phase 5P.
+
+### Phase 5P: Mid-Aisle Junction Anchors
+
+Meeting-risk segment anchors now project generated branch or connector
+junctions onto the parent aisle centerline.
+
+Current rules:
+
+- If another generated non-turnaround aisle declares the current aisle as its
+  `parent_aisle_id`, or lists the current aisle in `connected_aisle_ids`, the
+  checker intersects the two aisle polygons.
+- The intersection centroid is projected onto the current aisle axis and
+  recorded as a mid-aisle `aisle_junction` anchor when it is not at an endpoint.
+- Gap segment types now include:
+  - `endpoint_to_junction`
+  - `junction_to_passing_bay`
+  - `junction_to_junction`
+- Parent aisles can now report `entrance_to_junction` and
+  `junction_to_terminal` meeting-risk segments instead of treating the whole
+  parent aisle as one uninterrupted entrance-to-terminal gap.
+- `operational_quality.narrow_two_way_summary.passing_bay_projected_junction_count`
+  summarizes projected junction anchors.
+- `operational_quality.narrow_two_way_summary.passing_bay_junction_gap_count`
+  summarizes spacing gaps that touch a junction anchor.
+- This still does not solve branch merge priority, yielding, or swept-path
+  conflicts. It makes the route proxy aware of the missing internal junction
+  node so those checks can be layered later.
 
 ## Implementation Principle
 

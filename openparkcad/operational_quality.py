@@ -68,7 +68,7 @@ def operational_quality_report(layout: LayoutResult) -> dict[str, Any]:
     if narrow_two_way_risk_score:
         warnings.append(f"{narrow_two_way_risk_score:g} narrow two-way operational risk score is reported")
     return {
-        "version": "phase5o-1",
+        "version": "phase5p-1",
         "status": "active_failed" if not valid else "report_only",
         "mode": mode,
         "valid": valid,
@@ -453,7 +453,7 @@ def _narrow_two_way_risk_reports(layout: LayoutResult) -> dict[str, Any]:
             min_passing_bays,
         )
         return {
-            "version": "phase5o-1",
+            "version": "phase5p-1",
             "status": "not_applicable",
             "risk_count": 0,
             "risk_score": 0.0,
@@ -565,7 +565,7 @@ def _narrow_two_way_risk_reports(layout: LayoutResult) -> dict[str, Any]:
     )
     summary_risk_score = sum(float(item["risk_score"]) for item in summary_risks)
     return {
-        "version": "phase5o-1",
+        "version": "phase5p-1",
         "status": "active",
         "risk_count": (
             len([item for item in stall_issues if float(item["risk_score"]) > 0])
@@ -629,6 +629,10 @@ def _narrow_two_way_summary(
     longest_spacing = _max_report_value(passing_bay_spacing_reports, "longest_unserved_gap")
     exceeded_gap_count = sum(int(item.get("exceeded_gap_count", 0)) for item in passing_bay_spacing_reports)
     endpoint_gap_count = sum(int(item.get("endpoint_gap_count", 0)) for item in passing_bay_spacing_reports)
+    projected_junction_count = sum(
+        int(item.get("projected_junction_count", 0)) for item in passing_bay_spacing_reports
+    )
+    junction_gap_count = sum(int(item.get("junction_gap_count", 0)) for item in passing_bay_spacing_reports)
     meeting_risk_counts = _issue_counts(meeting_risks)
     shortage_count = (
         max(min_passing_bays - usable_passing_bay_count, 0)
@@ -647,6 +651,8 @@ def _narrow_two_way_summary(
         "passing_bay_spacing_issue_count": spacing_issue_count,
         "passing_bay_spacing_exceeded_gap_count": exceeded_gap_count,
         "passing_bay_endpoint_gap_count": endpoint_gap_count,
+        "passing_bay_projected_junction_count": projected_junction_count,
+        "passing_bay_junction_gap_count": junction_gap_count,
         "longest_passing_bay_gap": longest_spacing,
         "longest_passing_bay_gap_type": _longest_spacing_gap_type(passing_bay_spacing_reports, longest_spacing),
         "meeting_risk_count": len(meeting_risks),
@@ -938,7 +944,13 @@ def _passing_bay_spacing_reports(
                     "centerline_length": None,
                     "usable_passing_bay_count": len(usable_by_aisle.get(aisle.id, [])),
                     "projected_passing_bays": [],
+                    "projected_junctions": [],
+                    "projected_junction_count": 0,
                     "gaps": [],
+                    "gap_count": 0,
+                    "exceeded_gap_count": 0,
+                    "endpoint_gap_count": 0,
+                    "junction_gap_count": 0,
                     "longest_unserved_gap": None,
                     "max_passing_bay_spacing": max_spacing,
                     "issue": issue,
@@ -948,11 +960,17 @@ def _passing_bay_spacing_reports(
             continue
         assigned = usable_by_aisle.get(aisle.id, [])
         projected = _project_passing_bays(axis, assigned)
-        anchors = _passing_bay_spacing_anchors(axis, aisle, projected, site, all_aisles)
+        projected_junctions = _project_aisle_junctions(axis, aisle, all_aisles)
+        anchors = _passing_bay_spacing_anchors(axis, aisle, projected, projected_junctions, site, all_aisles)
         gaps = _passing_bay_spacing_gaps(anchors, max_spacing)
         longest_gap = max((gap["length"] for gap in gaps), default=float(axis.length))
         exceeded_gap_count = sum(1 for gap in gaps if gap["exceeds_limit"])
         endpoint_gap_count = sum(1 for gap in gaps if gap["segment_type"] == "endpoint_to_passing_bay")
+        junction_gap_count = sum(
+            1
+            for gap in gaps
+            if gap["start_network_kind"] == "aisle_junction" or gap["end_network_kind"] == "aisle_junction"
+        )
         issue = (
             "passing_bay_spacing_exceeds_limit"
             if max_spacing is not None and longest_gap > max_spacing + 1e-9
@@ -964,10 +982,13 @@ def _passing_bay_spacing_reports(
                 "centerline_length": float(axis.length),
                 "usable_passing_bay_count": len(projected),
                 "projected_passing_bays": projected,
+                "projected_junctions": projected_junctions,
+                "projected_junction_count": len(projected_junctions),
                 "gaps": gaps,
                 "gap_count": len(gaps),
                 "exceeded_gap_count": exceeded_gap_count,
                 "endpoint_gap_count": endpoint_gap_count,
+                "junction_gap_count": junction_gap_count,
                 "longest_unserved_gap": float(longest_gap),
                 "longest_unserved_gap_type": _longest_gap_type(gaps),
                 "max_passing_bay_spacing": max_spacing,
@@ -1046,6 +1067,7 @@ def _passing_bay_spacing_anchors(
     axis,
     aisle: ParkingAisle,
     projected: list[dict[str, Any]],
+    projected_junctions: list[dict[str, Any]],
     site: SiteSpec,
     all_aisles: list[ParkingAisle],
 ) -> list[dict[str, Any]]:
@@ -1067,6 +1089,16 @@ def _passing_bay_spacing_anchors(
             }
             for item in projected
         ],
+        *[
+            {
+                "kind": "aisle_junction",
+                "id": item["junction_aisle_id"],
+                "position_along_aisle": float(item["position_along_aisle"]),
+                "network_kind": "aisle_junction",
+                "network_id": item["junction_aisle_id"],
+            }
+            for item in projected_junctions
+        ],
         {
             "kind": "aisle_endpoint",
             "id": "end",
@@ -1078,6 +1110,45 @@ def _passing_bay_spacing_anchors(
     for anchor in anchors:
         deduped[(anchor["kind"], anchor["id"])] = anchor
     return sorted(deduped.values(), key=lambda item: item["position_along_aisle"])
+
+
+def _project_aisle_junctions(
+    axis,
+    aisle: ParkingAisle,
+    all_aisles: list[ParkingAisle],
+) -> list[dict[str, Any]]:
+    current_polygon = ShapelyPolygon(aisle.polygon)
+    if current_polygon.is_empty or current_polygon.area <= 1e-9:
+        return []
+    projected: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for other in all_aisles:
+        if other.id == aisle.id or other.role == "turnaround":
+            continue
+        if other.parent_aisle_id != aisle.id and aisle.id not in other.connected_aisle_ids:
+            continue
+        other_polygon = ShapelyPolygon(other.polygon)
+        if other_polygon.is_empty or other_polygon.area <= 1e-9:
+            continue
+        if current_polygon.distance(other_polygon) > 1e-6:
+            continue
+        intersection = current_polygon.intersection(other_polygon)
+        if intersection.is_empty:
+            continue
+        position = float(axis.project(intersection.centroid))
+        if position <= 1e-6 or position >= float(axis.length) - 1e-6:
+            continue
+        if other.id in seen:
+            continue
+        seen.add(other.id)
+        projected.append(
+            {
+                "junction_aisle_id": other.id,
+                "position_along_aisle": position,
+                "source": "aisle_intersection_centroid",
+            }
+        )
+    return sorted(projected, key=lambda item: item["position_along_aisle"])
 
 
 def _aisle_endpoint_context(
@@ -1164,10 +1235,17 @@ def _passing_bay_spacing_gaps(
 
 
 def _passing_bay_gap_type(left: dict[str, Any], right: dict[str, Any]) -> str:
-    if left["kind"] == "aisle_endpoint" and right["kind"] == "aisle_endpoint":
+    kinds = {left["kind"], right["kind"]}
+    if kinds == {"aisle_endpoint"}:
         return "no_passing_bay_full_aisle"
-    if left["kind"] == "aisle_endpoint" or right["kind"] == "aisle_endpoint":
+    if "aisle_endpoint" in kinds and "passing_bay" in kinds:
         return "endpoint_to_passing_bay"
+    if "aisle_endpoint" in kinds and "aisle_junction" in kinds:
+        return "endpoint_to_junction"
+    if "aisle_junction" in kinds and "passing_bay" in kinds:
+        return "junction_to_passing_bay"
+    if kinds == {"aisle_junction"}:
+        return "junction_to_junction"
     return "passing_bay_to_passing_bay"
 
 
