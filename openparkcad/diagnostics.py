@@ -42,7 +42,7 @@ def build_input_diagnostics(site: SiteSpec, layout: LayoutResult | None = None) 
         warnings.append("vehicle dimensions are parsed; Phase 3 uses conservative access and turning-sweep envelopes, but full turning radius is not enforced yet")
     if site.site_features:
         parsed_future_fields.append("site_features")
-        warnings.append("site_features are parsed and drawn; passing bay markers feed Phase 5L narrow two-way geometry and spacing segment reports, while other clearance or collision checks are still future")
+        warnings.append("site_features are parsed and drawn; passing bay markers feed Phase 5M narrow two-way geometry, spacing, and meeting-risk reports, while other clearance or collision checks are still future")
     if site.pedestrian_and_emergency:
         parsed_future_fields.append("pedestrian_and_emergency")
         warnings.append("pedestrian and emergency reservations are parsed but not enforced yet")
@@ -60,7 +60,7 @@ def build_input_diagnostics(site: SiteSpec, layout: LayoutResult | None = None) 
         warnings.append("optimization weights are active for Phase 1 scoring; candidate generation is still deliberately narrow")
     if layout and layout.operational_quality:
         mode = layout.operational_quality.get("mode", "score_only")
-        warnings.append(f"operational quality checks are active in {mode} mode for Phase 5L")
+        warnings.append(f"operational quality checks are active in {mode} mode for Phase 5M")
     unsupported = phase1_unsupported_inputs(site)
     warnings.extend(f"{item['field']} unsupported in Phase 1: {item['reason']}" for item in unsupported)
 
@@ -259,7 +259,7 @@ def _constraint_status(site: SiteSpec, layout: LayoutResult | None) -> list[dict
             "constraint": "operational quality risk report",
             "status": _operational_quality_status(layout),
             "note": (
-                "Phase 5L reports junction, entrance-throat, route, route-summary, directionality, narrow two-way exposure, and passing bay geometry/spacing segment risks; configured modes can score, gate promotion, or hard-reject risky layouts."
+                "Phase 5M reports junction, entrance-throat, route, route-summary, directionality, narrow two-way exposure, and passing bay geometry/spacing/meeting risks; configured modes can score, gate promotion, or hard-reject risky layouts."
                 if _operational_quality_status(layout) == "active"
                 else "Operational quality checks are only available after layout generation."
             ),
@@ -372,6 +372,7 @@ def _field_support(site: SiteSpec, layout: LayoutResult | None) -> dict[str, str
         "optimization.operational_passing_bay_geometry_issue_risk": "available" if layout else "future",
         "optimization.operational_max_passing_bay_spacing": "available" if layout else "future",
         "optimization.operational_passing_bay_spacing_risk": "available" if layout else "future",
+        "optimization.operational_narrow_two_way_meeting_gap_risk": "available" if layout else "future",
         "optimization.candidate_layout_preview": "active" if layout and layout.candidate_layout_preview else "future",
         "optimization.candidate_layout_preview_scoring": "active" if _layout_preview_comparison(layout) else "future",
         "optimization.promote_candidate_layout_preview": _candidate_layout_promotion_status(layout),

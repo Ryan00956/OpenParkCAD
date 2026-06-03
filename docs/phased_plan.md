@@ -1267,6 +1267,27 @@ Current rules:
 - This is still not a traffic simulation, but it gives the later deadlock model
   concrete road segments to reason about.
 
+### Phase 5M: Narrow Two-Way Meeting Risk Proxy
+
+Narrow two-way spacing gaps are now translated into first-pass meeting-risk
+records.
+
+Current rules:
+
+- Meeting risks are derived from passing bay gap segments that exceed
+  `optimization.operational_max_passing_bay_spacing`.
+- `no_passing_bay_full_aisle` becomes
+  `full_aisle_without_meeting_refuge`.
+- `endpoint_to_passing_bay` becomes
+  `endpoint_to_refuge_gap_exceeds_limit`.
+- `passing_bay_to_passing_bay` becomes
+  `refuge_to_refuge_gap_exceeds_limit`.
+- `optimization.operational_narrow_two_way_meeting_gap_risk` controls whether
+  those diagnostic meeting risks add score and can block promotion. It defaults
+  to 0.0.
+- This is still a proxy. It does not simulate vehicle arrival order, priority,
+  waiting behavior, or swept paths into and out of a passing bay.
+
 ## Implementation Principle
 
 Keep these layers separate in code:

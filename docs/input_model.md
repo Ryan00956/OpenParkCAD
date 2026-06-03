@@ -1001,7 +1001,8 @@ optimization operational_min_passing_bay_area active for Phase 5J passing bay ge
 optimization operational_passing_bay_geometry_issue_risk active for Phase 5J unusable passing bay geometry risk score
 optimization operational_max_passing_bay_spacing active for Phase 5K passing bay spacing threshold
 optimization operational_passing_bay_spacing_risk active for Phase 5K passing bay spacing risk score
-optimization weights.operational_risk active for Phase 5L soft-risk scoring
+optimization operational_narrow_two_way_meeting_gap_risk active for Phase 5M narrow two-way meeting risk score
+optimization weights.operational_risk active for Phase 5M soft-risk scoring
 optimization weights                    active for Phase 1 scoring
 optimization score breakdown            active in JSON report
 optimization promote_candidate_layout_preview active as guarded opt-in
@@ -1011,7 +1012,7 @@ report selected_connectors              active, includes removed and added stall
 report traffic_graph validation          active in JSON report
 report maneuver_validation              active in JSON report
 report maneuver_validation rule_counts  active in JSON report
-report operational_quality              active as Phase 5L local, route, summary, directionality, narrow two-way, and passing bay geometry/spacing segment risk report
+report operational_quality              active as Phase 5M local, route, summary, directionality, narrow two-way, and passing bay geometry/spacing/meeting risk report
 report selected_stall_type_id           active in JSON report
 report stall_type_attempts              active in JSON report
 report selected_stall_assignment        active in JSON report

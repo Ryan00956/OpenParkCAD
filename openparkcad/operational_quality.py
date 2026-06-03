@@ -68,7 +68,7 @@ def operational_quality_report(layout: LayoutResult) -> dict[str, Any]:
     if narrow_two_way_risk_score:
         warnings.append(f"{narrow_two_way_risk_score:g} narrow two-way operational risk score is reported")
     return {
-        "version": "phase5l-1",
+        "version": "phase5m-1",
         "status": "active_failed" if not valid else "report_only",
         "mode": mode,
         "valid": valid,
@@ -432,6 +432,10 @@ def _narrow_two_way_risk_reports(layout: LayoutResult) -> dict[str, Any]:
         layout.site.optimization.get("operational_passing_bay_spacing_risk", 1.0),
         1.0,
     )
+    meeting_gap_risk = _nonnegative_float(
+        layout.site.optimization.get("operational_narrow_two_way_meeting_gap_risk", 0.0),
+        0.0,
+    )
     passing_bay_shortage_risk = _nonnegative_float(
         layout.site.optimization.get("operational_passing_bay_shortage_risk", 1.0),
         1.0,
@@ -445,16 +449,18 @@ def _narrow_two_way_risk_reports(layout: LayoutResult) -> dict[str, Any]:
             passing_bays,
             [],
             [],
+            [],
             min_passing_bays,
         )
         return {
-            "version": "phase5l-1",
+            "version": "phase5m-1",
             "status": "not_applicable",
             "risk_count": 0,
             "risk_score": 0.0,
             "stall_issue_risk_score": 0.0,
             "passing_bay_issue_risk_score": 0.0,
             "passing_bay_spacing_risk_score": 0.0,
+            "meeting_risk_score": 0.0,
             "summary_risk_score": 0.0,
             "narrow_two_way_issue_risk": issue_risk,
             "max_narrow_two_way_stall_ratio": max_stall_ratio,
@@ -464,12 +470,14 @@ def _narrow_two_way_risk_reports(layout: LayoutResult) -> dict[str, Any]:
             "passing_bay_geometry_issue_risk": passing_bay_geometry_issue_risk,
             "max_passing_bay_spacing": max_passing_bay_spacing,
             "passing_bay_spacing_risk": passing_bay_spacing_risk,
+            "meeting_gap_risk": meeting_gap_risk,
             "min_passing_bays": min_passing_bays,
             "passing_bay_shortage_risk": passing_bay_shortage_risk,
             "selected_aisle_class": _aisle_class_report(aisle_class),
             "passing_bay_model_available": summary["passing_bay_model_available"],
             "passing_bays": passing_bays,
             "passing_bay_spacing": [],
+            "meeting_risks": [],
             "summary": summary,
             "summary_risks": [],
             "aisle_issues": [],
@@ -489,6 +497,10 @@ def _narrow_two_way_risk_reports(layout: LayoutResult) -> dict[str, Any]:
         passing_bay_reports,
         max_passing_bay_spacing,
         passing_bay_spacing_risk,
+    )
+    meeting_risks = _narrow_two_way_meeting_risks(
+        passing_bay_spacing_reports,
+        meeting_gap_risk,
     )
     usable_passing_bay_count = sum(1 for item in passing_bay_reports if item["usable"])
     passing_bay_model_available = bool(passing_bay_reports)
@@ -531,6 +543,7 @@ def _narrow_two_way_risk_reports(layout: LayoutResult) -> dict[str, Any]:
     stall_issue_risk_score = sum(float(item["risk_score"]) for item in stall_issues)
     passing_bay_issue_risk_score = sum(float(item["risk_score"]) for item in passing_bay_reports)
     passing_bay_spacing_risk_score = sum(float(item["risk_score"]) for item in passing_bay_spacing_reports)
+    meeting_risk_score = sum(float(item["risk_score"]) for item in meeting_risks)
     summary = _narrow_two_way_summary(
         aisle_issues,
         stall_issues,
@@ -539,6 +552,7 @@ def _narrow_two_way_risk_reports(layout: LayoutResult) -> dict[str, Any]:
         passing_bays,
         passing_bay_reports,
         passing_bay_spacing_reports,
+        meeting_risks,
         min_passing_bays,
     )
     summary_risks = _narrow_two_way_summary_risks(
@@ -549,23 +563,26 @@ def _narrow_two_way_risk_reports(layout: LayoutResult) -> dict[str, Any]:
     )
     summary_risk_score = sum(float(item["risk_score"]) for item in summary_risks)
     return {
-        "version": "phase5l-1",
+        "version": "phase5m-1",
         "status": "active",
         "risk_count": (
             len([item for item in stall_issues if float(item["risk_score"]) > 0])
             + len([item for item in passing_bay_reports if float(item["risk_score"]) > 0])
             + len([item for item in passing_bay_spacing_reports if float(item["risk_score"]) > 0])
+            + len([item for item in meeting_risks if float(item["risk_score"]) > 0])
             + len(summary_risks)
         ),
         "risk_score": float(
             stall_issue_risk_score
             + passing_bay_issue_risk_score
             + passing_bay_spacing_risk_score
+            + meeting_risk_score
             + summary_risk_score
         ),
         "stall_issue_risk_score": float(stall_issue_risk_score),
         "passing_bay_issue_risk_score": float(passing_bay_issue_risk_score),
         "passing_bay_spacing_risk_score": float(passing_bay_spacing_risk_score),
+        "meeting_risk_score": float(meeting_risk_score),
         "summary_risk_score": float(summary_risk_score),
         "narrow_two_way_issue_risk": issue_risk,
         "max_narrow_two_way_stall_ratio": max_stall_ratio,
@@ -575,12 +592,14 @@ def _narrow_two_way_risk_reports(layout: LayoutResult) -> dict[str, Any]:
         "passing_bay_geometry_issue_risk": passing_bay_geometry_issue_risk,
         "max_passing_bay_spacing": max_passing_bay_spacing,
         "passing_bay_spacing_risk": passing_bay_spacing_risk,
+        "meeting_gap_risk": meeting_gap_risk,
         "min_passing_bays": min_passing_bays,
         "passing_bay_shortage_risk": passing_bay_shortage_risk,
         "selected_aisle_class": _aisle_class_report(aisle_class),
         "passing_bay_model_available": summary["passing_bay_model_available"],
         "passing_bays": passing_bay_reports,
         "passing_bay_spacing": passing_bay_spacing_reports,
+        "meeting_risks": meeting_risks,
         "summary": summary,
         "summary_risks": summary_risks,
         "aisle_issues": aisle_issues,
@@ -596,6 +615,7 @@ def _narrow_two_way_summary(
     passing_bays: list[dict[str, Any]],
     passing_bay_reports: list[dict[str, Any]],
     passing_bay_spacing_reports: list[dict[str, Any]],
+    meeting_risks: list[dict[str, Any]],
     min_passing_bays: int | None,
 ) -> dict[str, Any]:
     affected_stall_count = len(stall_issues)
@@ -607,6 +627,7 @@ def _narrow_two_way_summary(
     longest_spacing = _max_report_value(passing_bay_spacing_reports, "longest_unserved_gap")
     exceeded_gap_count = sum(int(item.get("exceeded_gap_count", 0)) for item in passing_bay_spacing_reports)
     endpoint_gap_count = sum(int(item.get("endpoint_gap_count", 0)) for item in passing_bay_spacing_reports)
+    meeting_risk_counts = _issue_counts(meeting_risks)
     shortage_count = (
         max(min_passing_bays - usable_passing_bay_count, 0)
         if is_narrow_two_way and min_passing_bays is not None
@@ -626,6 +647,11 @@ def _narrow_two_way_summary(
         "passing_bay_endpoint_gap_count": endpoint_gap_count,
         "longest_passing_bay_gap": longest_spacing,
         "longest_passing_bay_gap_type": _longest_spacing_gap_type(passing_bay_spacing_reports, longest_spacing),
+        "meeting_risk_count": len(meeting_risks),
+        "full_aisle_meeting_risk_count": meeting_risk_counts.get("full_aisle_without_meeting_refuge", 0),
+        "endpoint_meeting_trap_count": meeting_risk_counts.get("endpoint_to_refuge_gap_exceeds_limit", 0),
+        "mid_segment_meeting_risk_count": meeting_risk_counts.get("refuge_to_refuge_gap_exceeds_limit", 0),
+        "meeting_risk_counts": meeting_risk_counts,
         "min_passing_bays": min_passing_bays,
         "passing_bay_shortage_count": shortage_count,
         "narrow_two_way_aisle_count": len(aisle_issues),
@@ -944,6 +970,52 @@ def _passing_bay_spacing_reports(
             }
         )
     return reports
+
+
+def _narrow_two_way_meeting_risks(
+    spacing_reports: list[dict[str, Any]],
+    meeting_gap_risk: float,
+) -> list[dict[str, Any]]:
+    risks: list[dict[str, Any]] = []
+    for spacing in spacing_reports:
+        aisle_id = spacing.get("aisle_id")
+        gaps = spacing.get("gaps", [])
+        if not isinstance(gaps, list):
+            continue
+        risk_index = 1
+        for gap in gaps:
+            if not isinstance(gap, dict) or not gap.get("exceeds_limit"):
+                continue
+            issue = _meeting_issue_for_gap(gap)
+            risks.append(
+                {
+                    "id": f"OQ-NARROW-TWO-WAY-MEETING-{aisle_id}-{risk_index:03d}",
+                    "aisle_id": aisle_id,
+                    "issue": issue,
+                    "model": "passing_bay_gap_proxy",
+                    "segment_type": gap["segment_type"],
+                    "start": gap["start"],
+                    "end": gap["end"],
+                    "length": gap["length"],
+                    "start_kind": gap["start_kind"],
+                    "start_id": gap["start_id"],
+                    "end_kind": gap["end_kind"],
+                    "end_id": gap["end_id"],
+                    "max_passing_bay_spacing": spacing.get("max_passing_bay_spacing"),
+                    "risk_score": float(meeting_gap_risk),
+                }
+            )
+            risk_index += 1
+    return risks
+
+
+def _meeting_issue_for_gap(gap: dict[str, Any]) -> str:
+    segment_type = gap.get("segment_type")
+    if segment_type == "no_passing_bay_full_aisle":
+        return "full_aisle_without_meeting_refuge"
+    if segment_type == "endpoint_to_passing_bay":
+        return "endpoint_to_refuge_gap_exceeds_limit"
+    return "refuge_to_refuge_gap_exceeds_limit"
 
 
 def _passing_bay_spacing_anchors(axis_length: float, projected: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1629,6 +1701,25 @@ def _directionality_conflicts(directionality_risks: dict[str, Any]) -> list[dict
 
 def _narrow_two_way_conflicts(narrow_two_way_risks: dict[str, Any]) -> list[dict[str, Any]]:
     conflicts = []
+    raw_meeting = narrow_two_way_risks.get("meeting_risks", [])
+    if isinstance(raw_meeting, list):
+        for item in raw_meeting:
+            if not isinstance(item, dict) or float(item.get("risk_score", 0.0)) <= 0:
+                continue
+            conflicts.append(
+                {
+                    "source_type": "narrow_two_way_meeting",
+                    "source_id": item["id"],
+                    "aisle_id": item["aisle_id"],
+                    "issue": item["issue"],
+                    "segment_type": item["segment_type"],
+                    "start": item["start"],
+                    "end": item["end"],
+                    "length": item["length"],
+                    "max_passing_bay_spacing": item["max_passing_bay_spacing"],
+                    "risk_score": item["risk_score"],
+                }
+            )
     raw_spacing = narrow_two_way_risks.get("passing_bay_spacing", [])
     if isinstance(raw_spacing, list):
         for item in raw_spacing:
