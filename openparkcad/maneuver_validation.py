@@ -149,7 +149,6 @@ def _front_access_envelope(
     minimum_coverage_ratio: float,
     minimum_turn_coverage_ratio: float,
 ) -> dict[str, Any]:
-    site = context.site
     if not stall.served_by_aisle_id:
         return {"envelope": None, "reason": "stall_has_no_serving_aisle"}
     aisle = context.aisle_by_id.get(stall.served_by_aisle_id)

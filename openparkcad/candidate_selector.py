@@ -322,7 +322,9 @@ def _shadow_score(candidate: CandidateObject) -> float:
 
 def _stall_delta(candidate: CandidateObject) -> float:
     if candidate.role == "connector":
-        return float(candidate.score_features.get("added_stalls", 0.0))
+        added = float(candidate.score_features.get("added_stalls", 0.0))
+        removed = float(candidate.score_features.get("removed_stalls", 0.0))
+        return added - removed
     stall_count = candidate.score_features.get("stall_count")
     base_stall_count = candidate.score_features.get("base_stall_count")
     if stall_count is not None and base_stall_count is not None:

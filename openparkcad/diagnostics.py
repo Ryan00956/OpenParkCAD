@@ -250,7 +250,7 @@ def _constraint_status(site: SiteSpec, layout: LayoutResult | None) -> list[dict
             "constraint": "angled stall maneuver proxy",
             "status": _angled_maneuver_status(site, layout),
             "note": (
-                "Phase 3C-2 can validate angled stall access envelopes, but angled stall generation is still future work."
+                "Phase 3C-2 validates angled stall access envelopes for generated main-aisle and branch stalls."
                 if _angled_maneuver_status(site, layout) == "active"
                 else "Angled stall maneuver validation is available only when the active stall family is angled."
             ),
@@ -339,7 +339,7 @@ def _field_support(site: SiteSpec, layout: LayoutResult | None) -> dict[str, str
         "constraints.operational_narrow_two_way_risk": _operational_quality_status(layout),
         "constraints.turning_radius": "future",
         "constraints.swept_path": "future",
-        "optimization.weights": "parsed_not_enforced" if site.optimization else "future",
+        "optimization.weights": "active" if layout and layout.score else ("available" if site.optimization else "future"),
         "optimization.score_breakdown": "active" if _phase1_main_aisle_active(layout) else "future",
         "optimization.candidate_objects": "active" if layout and layout.candidate_objects else "future",
         "optimization.candidate_conflict_matrix": "active" if layout and layout.candidate_objects else "future",

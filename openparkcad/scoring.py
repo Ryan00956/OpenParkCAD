@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
-
 from shapely.geometry import Polygon as ShapelyPolygon
 
 from openparkcad.models import LayoutResult, SiteSpec

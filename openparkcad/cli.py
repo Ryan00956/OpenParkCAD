@@ -2,7 +2,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
+import shutil
+import sys
+import tempfile
+from collections.abc import Callable
+from typing import Any
 
 from openparkcad.candidate_layout_preview import candidate_layout_preview_report
 from openparkcad.candidate_network_preview import candidate_network_preview_report
@@ -33,13 +39,41 @@ def main(argv: list[str] | None = None) -> int:
 
 def _solve(args: argparse.Namespace) -> int:
     site_path = Path(args.site)
-    data = json.loads(site_path.read_text(encoding="utf-8"))
-    site = site_from_dict(data)
-    layout = generate_layout(site)
+    try:
+        data = json.loads(site_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return _error(f"site file not found: {site_path}")
+    except json.JSONDecodeError as exc:
+        return _error(f"invalid JSON in {site_path} at line {exc.lineno}, column {exc.colno}")
+    except (OSError, UnicodeError) as exc:
+        return _error(f"could not read site file {site_path}: {exc}")
 
-    write_dxf(layout, args.out)
-    write_svg(layout, args.preview)
-    _write_report(layout, args.report)
+    if not isinstance(data, dict):
+        return _error("invalid site input: top-level JSON value must be an object")
+
+    try:
+        site = site_from_dict(data)
+    except (KeyError, TypeError, ValueError) as exc:
+        return _error(f"invalid site input: {exc}")
+
+    try:
+        layout = generate_layout(site)
+    except ValueError as exc:
+        return _error(f"could not generate layout: {exc}")
+
+    validation_errors = _final_layout_errors(layout)
+    if validation_errors:
+        return _error(f"no valid final layout: {'; '.join(validation_errors)}", exit_code=3)
+
+    try:
+        _write_output_set(
+            layout,
+            dxf_path=Path(args.out),
+            svg_path=Path(args.preview),
+            report_path=Path(args.report),
+        )
+    except Exception as exc:
+        return _error(f"could not write outputs: {exc}", exit_code=4)
 
     print(f"site: {site.name}")
     print(f"stalls: {layout.stall_count}")
@@ -49,7 +83,7 @@ def _solve(args: argparse.Namespace) -> int:
     return 0
 
 
-def _write_report(layout, path: str) -> None:
+def _write_report(layout, path: str | Path) -> None:
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     data = {
@@ -133,6 +167,97 @@ def _write_report(layout, path: str) -> None:
         "input_diagnostics": build_input_diagnostics(layout.site, layout),
     }
     target.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
+def _final_layout_errors(layout) -> list[str]:
+    errors: list[str] = []
+    if layout.stall_count <= 0:
+        errors.append("layout contains no parking stalls")
+
+    graph_validation = layout.graph_validation
+    if not graph_validation.get("valid", False):
+        details = ", ".join(str(item) for item in graph_validation.get("errors", []))
+        errors.append(f"traffic graph validation failed{f' ({details})' if details else ''}")
+
+    maneuver_validation = layout.maneuver_validation
+    if not maneuver_validation.get("valid", False):
+        invalid_count = len(maneuver_validation.get("invalid_stalls", []))
+        errors.append(
+            f"maneuver validation failed{f' ({invalid_count} invalid stalls)' if invalid_count else ''}"
+        )
+
+    operational_quality = layout.operational_quality
+    if not operational_quality.get("valid", False):
+        risk_score = operational_quality.get("risk_score")
+        errors.append(
+            f"operational quality hard rejection{f' (risk score {risk_score:g})' if isinstance(risk_score, int | float) else ''}"
+        )
+    return errors
+
+
+def _write_output_set(layout, dxf_path: Path, svg_path: Path, report_path: Path) -> None:
+    outputs: list[tuple[Path, Callable[[Any, str | Path], None]]] = [
+        (dxf_path, write_dxf),
+        (svg_path, write_svg),
+        (report_path, _write_report),
+    ]
+    _require_distinct_output_paths([target for target, _ in outputs])
+
+    temporary_paths: dict[Path, Path] = {}
+    backup_paths: dict[Path, Path] = {}
+    try:
+        for target, _ in outputs:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            temporary_paths[target] = _temporary_sibling(target, suffix=".tmp")
+
+        for target, writer in outputs:
+            writer(layout, temporary_paths[target])
+
+        for target, _ in outputs:
+            if target.is_file():
+                backup = _temporary_sibling(target, suffix=".bak")
+                shutil.copy2(target, backup)
+                backup_paths[target] = backup
+
+        committed: list[Path] = []
+        try:
+            for target, _ in outputs:
+                os.replace(temporary_paths[target], target)
+                committed.append(target)
+        except Exception:
+            for target in reversed(committed):
+                backup = backup_paths.get(target)
+                if backup is not None and backup.exists():
+                    os.replace(backup, target)
+                else:
+                    target.unlink(missing_ok=True)
+            raise
+    finally:
+        for temporary in temporary_paths.values():
+            temporary.unlink(missing_ok=True)
+        for backup in backup_paths.values():
+            backup.unlink(missing_ok=True)
+
+
+def _require_distinct_output_paths(paths: list[Path]) -> None:
+    identities = [os.path.normcase(str(path.resolve())) for path in paths]
+    if len(set(identities)) != len(identities):
+        raise ValueError("DXF, SVG, and report output paths must be different")
+
+
+def _temporary_sibling(target: Path, suffix: str) -> Path:
+    descriptor, raw_path = tempfile.mkstemp(
+        prefix=f".{target.name}.",
+        suffix=suffix,
+        dir=target.parent,
+    )
+    os.close(descriptor)
+    return Path(raw_path)
+
+
+def _error(message: str, exit_code: int = 2) -> int:
+    print(f"error: {message}", file=sys.stderr)
+    return exit_code
 
 
 def _stall_spec_report(stall) -> dict[str, object]:

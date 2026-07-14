@@ -1,7 +1,7 @@
 from dataclasses import replace
 
 from openparkcad.generator import generate_layout
-from openparkcad.models import AisleClassSpec, EntranceSpec, LayoutResult, ParkingAisle, ParkingStall, SiteSpec, StallSpec
+from openparkcad.models import AisleClassSpec, EntranceSpec, ParkingAisle, ParkingStall, SiteSpec, StallSpec
 from openparkcad.traffic_graph import build_traffic_graph, traffic_graph_report, validate_traffic_graph
 
 

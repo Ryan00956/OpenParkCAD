@@ -32,7 +32,7 @@ from openparkcad.phase1_support import (
 
 
 FinalizeLayout = Callable[[LayoutResult], LayoutResult]
-GraphValid = Callable[[LayoutResult], bool]
+LayoutValid = Callable[[LayoutResult], bool]
 LayoutScoreTotal = Callable[[LayoutResult], float]
 
 
@@ -59,7 +59,7 @@ class ConnectorGeometry:
 def iter_phase1_candidates(
     site: SiteSpec,
     finalize_layout: FinalizeLayout,
-    graph_valid: GraphValid,
+    layout_valid: LayoutValid,
     score_total: LayoutScoreTotal,
 ) -> list[Phase1Candidate]:
     candidates: list[Phase1Candidate] = []
@@ -75,7 +75,7 @@ def iter_phase1_candidates(
                     heading_delta,
                     offset,
                     finalize_layout,
-                    graph_valid,
+                    layout_valid,
                     score_total,
                 )
                 candidates.append(
@@ -98,7 +98,7 @@ def _generate_for_entrance(
     heading_delta_degrees: float,
     entrance_offset: float,
     finalize_layout: FinalizeLayout,
-    graph_valid: GraphValid,
+    layout_valid: LayoutValid,
     score_total: LayoutScoreTotal,
 ) -> tuple[LayoutResult, list[dict[str, object]]]:
     if not supports_phase1_aisle(site) or not supports_phase1_stall(site) or entrance.width + 1e-9 < site.aisle_width:
@@ -152,7 +152,7 @@ def _generate_for_entrance(
             unsupported_phase1_inputs=phase1_unsupported_inputs(site),
         )
     )
-    return _with_best_branch(site, available, entrance, heading_degrees, base, aisle_length, finalize_layout, graph_valid, score_total)
+    return _with_best_branch(site, available, entrance, heading_degrees, base, aisle_length, finalize_layout, layout_valid, score_total)
 
 
 def _empty_layout(
@@ -258,7 +258,7 @@ def _with_best_branch(
     base: LayoutResult,
     main_aisle_length: float,
     finalize_layout: FinalizeLayout,
-    graph_valid: GraphValid,
+    layout_valid: LayoutValid,
     score_total: LayoutScoreTotal,
 ) -> tuple[LayoutResult, list[dict[str, object]]]:
     if not site.optimization.get("enable_branches", True):
@@ -282,17 +282,21 @@ def _with_best_branch(
                     side,
                     branch_index,
                     finalize_layout,
-                    graph_valid,
+                    layout_valid,
                     score_total,
                 )
                 diagnostic["iteration"] = iteration
                 branch_candidates.append(diagnostic)
-                if candidate and graph_valid(candidate) and score_total(candidate) > score_total(round_best):
+                if (
+                    candidate
+                    and layout_valid(candidate)
+                    and (not layout_valid(round_best) or score_total(candidate) > score_total(round_best))
+                ):
                     round_best = candidate
         if round_best is best:
             break
         best = round_best
-    best = _with_best_connectors(site, available, entrance, heading_degrees, best, finalize_layout, graph_valid, score_total, branch_candidates)
+    best = _with_best_connectors(site, available, entrance, heading_degrees, best, finalize_layout, layout_valid, score_total, branch_candidates)
     return best, branch_candidates
 
 
@@ -306,7 +310,7 @@ def _branch_layout(
     side: str,
     branch_index: int,
     finalize_layout: FinalizeLayout,
-    graph_valid: GraphValid,
+    layout_valid: LayoutValid,
     score_total: LayoutScoreTotal,
 ) -> tuple[LayoutResult | None, dict[str, object]]:
     branch_id = f"A-BRANCH-{branch_index:03d}"
@@ -408,10 +412,23 @@ def _branch_layout(
         )
     )
     diagnostic["stall_count"] = result.stall_count
-    diagnostic["graph_valid"] = graph_valid(result)
+    graph_is_valid = bool(result.graph_validation.get("valid", False))
+    maneuver_is_valid = bool(result.maneuver_validation.get("valid", False))
+    operational_is_valid = bool(result.operational_quality.get("valid", False))
+    layout_is_valid = layout_valid(result)
+    diagnostic["graph_valid"] = graph_is_valid
     diagnostic["graph_errors"] = list(result.graph_validation.get("errors", []))
-    if not graph_valid(result):
+    diagnostic["maneuver_valid"] = maneuver_is_valid
+    diagnostic["operational_valid"] = operational_is_valid
+    diagnostic["operational_blockers"] = list(result.operational_quality.get("promotion_blockers", []))
+    if not graph_is_valid:
         diagnostic["reason"] = "branch_invalid_traffic_graph"
+        return result, diagnostic
+    if not maneuver_is_valid:
+        diagnostic["reason"] = "branch_invalid_maneuver_validation"
+        return result, diagnostic
+    if not layout_is_valid:
+        diagnostic["reason"] = "branch_invalid_operational_quality"
         return result, diagnostic
     if score_total(result) <= score_total(base):
         diagnostic["reason"] = "branch_does_not_improve_score"
@@ -550,7 +567,7 @@ def _with_best_connectors(
     heading_degrees: float,
     base: LayoutResult,
     finalize_layout: FinalizeLayout,
-    graph_valid: GraphValid,
+    layout_valid: LayoutValid,
     score_total: LayoutScoreTotal,
     diagnostics: list[dict[str, object]],
 ) -> LayoutResult:
@@ -581,15 +598,14 @@ def _with_best_connectors(
                 branch_b,
                 inset_depth,
                 finalize_layout,
-                graph_valid,
+                layout_valid,
                 score_total,
             )
             diagnostics.append(diagnostic)
             if (
                 candidate
-                and graph_valid(candidate)
-                and candidate.stall_count > pair_base.stall_count
-                and score_total(candidate) > score_total(pair_best)
+                and layout_valid(candidate)
+                and (not layout_valid(pair_best) or score_total(candidate) > score_total(pair_best))
             ):
                 pair_best = candidate
         best = pair_best
@@ -606,7 +622,7 @@ def _connector_layout(
     branch_b: dict[str, object],
     inset_depth: float,
     finalize_layout: FinalizeLayout,
-    graph_valid: GraphValid,
+    layout_valid: LayoutValid,
     score_total: LayoutScoreTotal,
 ) -> tuple[LayoutResult | None, dict[str, object]]:
     connector_id = f"A-CONNECTOR-{len(base.selected_connectors) + 1:03d}"
@@ -709,10 +725,23 @@ def _connector_layout(
     diagnostic["removed_stalls"] = removed_stalls
     diagnostic["added_stalls"] = len(connector_stalls)
     diagnostic["removed_turnarounds"] = sorted(removed_turnarounds)
-    diagnostic["graph_valid"] = graph_valid(result)
+    graph_is_valid = bool(result.graph_validation.get("valid", False))
+    maneuver_is_valid = bool(result.maneuver_validation.get("valid", False))
+    operational_is_valid = bool(result.operational_quality.get("valid", False))
+    layout_is_valid = layout_valid(result)
+    diagnostic["graph_valid"] = graph_is_valid
     diagnostic["graph_errors"] = list(result.graph_validation.get("errors", []))
-    if not graph_valid(result):
+    diagnostic["maneuver_valid"] = maneuver_is_valid
+    diagnostic["operational_valid"] = operational_is_valid
+    diagnostic["operational_blockers"] = list(result.operational_quality.get("promotion_blockers", []))
+    if not graph_is_valid:
         diagnostic["reason"] = "connector_invalid_traffic_graph"
+        return result, diagnostic
+    if not maneuver_is_valid:
+        diagnostic["reason"] = "connector_invalid_maneuver_validation"
+        return result, diagnostic
+    if not layout_is_valid:
+        diagnostic["reason"] = "connector_invalid_operational_quality"
         return result, diagnostic
     if score_total(result) <= score_total(base):
         diagnostic["reason"] = "connector_does_not_improve_score"

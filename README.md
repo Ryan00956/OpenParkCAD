@@ -1,24 +1,42 @@
 # OpenParkCAD
 
-OpenParkCAD is a Python-first experiment for automatically laying out parking
-spaces inside irregular land parcels.
+OpenParkCAD is a Python-first experimental kernel for generating parking layouts
+inside irregular land parcels. The implementation currently reaches the Phase
+5Q reporting slice, while the package version remains `0.1.0`.
 
-The current MVP uses Shapely for geometry and ezdxf for CAD output. It can:
+This is a planning and algorithm-development tool. It is **not** a code-compliance
+checker, a construction-design system, or a substitute for vehicle swept-path,
+fire-access, accessibility, and local-authority review.
 
-- read the Phase 0+ JSON input model,
-- draw diagnostic layers for entrances, fixed features, and pedestrian/fire reservations,
-- generate a conservative Phase 1 layout from an entrance-connected main aisle,
-- build a Phase 2A traffic graph from the generated aisles and stalls,
-- run a Phase 3A conservative stall access envelope check,
-- reserve an end turnaround pad,
-- avoid obstacles,
-- write a DXF file with CAD layers,
-- write an SVG preview,
-- write a JSON report.
+## Current capability
+
+The solver can currently:
+
+- read the documented JSON site model and separate active fields from parsed,
+  future-facing fields;
+- generate a straight entrance-connected main aisle, end turnaround,
+  perpendicular branches, and a limited same-side U-shaped connector pattern;
+- generate 90-degree and angled stalls on supported main/branch aisles, and
+  conservative 90-degree stalls on connectors;
+- filter generated geometry against the usable site and obstacles;
+- validate generated aisle/stall reachability with a traffic graph;
+- apply rectangular and optional L-shaped maneuver-clearance **proxies**;
+- compare stall types and main/branch stall assignments with an explainable
+  score;
+- create a candidate snapshot, conflict matrix, heuristic shadow selection,
+  validated preview layout, and guarded preview promotion;
+- report Phase 5Q operational-risk **proxies** for junctions, entrance throats,
+  routes, directionality, narrow two-way aisles, passing bays, meeting gaps, and
+  junction merges; and
+- export layered DXF, SVG preview, and a detailed JSON report.
+
+The phase label describes implementation history, not product readiness. See
+[the current capability matrix](docs/current_status.md) for the precise trust
+boundary and [the roadmap](docs/roadmap.md) for release priorities.
 
 ## Setup
 
-Use a normal Python virtual environment. Conda is not required for this project.
+OpenParkCAD requires Python 3.10 or newer. Conda is not required.
 
 ```powershell
 python -m venv .venv
@@ -26,276 +44,126 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -e ".[dev]"
 ```
 
-## Quick Start
+Runtime installation does not require Matplotlib or OR-Tools. The current
+selector is heuristic and does not call OR-Tools. The reserved optimizer extra
+is available only for future CP-SAT work:
 
 ```powershell
-.\.venv\Scripts\python.exe -m openparkcad solve examples/phase0_site.json --out output/phase1_site.dxf --preview output/phase1_site.svg --report output/phase1_site_report.json
+.\.venv\Scripts\python.exe -m pip install -e ".[dev,optimizer]"
 ```
 
-Open `output/phase1_site.svg` in a browser for a quick preview, or open the DXF in CAD.
+## Quick start
 
-The report includes `input_diagnostics`, which separates active checks from
-future-facing fields that are parsed but not enforced yet.
+```powershell
+.\.venv\Scripts\openparkcad.exe solve examples/phase0_site.json `
+  --out output/layout.dxf `
+  --preview output/layout.svg `
+  --report output/report.json
+```
 
-The Phase 1 generator currently uses the first supported circulation pattern:
+The equivalent module entry point is `python -m openparkcad solve ...`.
+
+The JSON report includes the selected layout and score, attempted candidates,
+input diagnostics, traffic-graph validation, maneuver validation,
+`candidate_snapshot`, `candidate_network_preview`, `candidate_layout_preview`,
+`candidate_layout_promotion`, and Phase 5Q `operational_quality`.
+
+## Selection and promotion
+
+The official layout starts from a conservative template:
 
 ```text
-entry-capable entrance -> straight wide two-way main aisle -> end turnaround -> standard stalls on both sides
+entry-capable entrance -> straight two-way main aisle -> end turnaround
+                                  |
+                                  +-> optional perpendicular branches
+                                  +-> optional same-side U connector
 ```
 
-It tries a small set of heading offsets around the entrance direction and a few
-parallel offsets inside the entrance width, then keeps the legal main-aisle
-layout with the most stalls.
+Heading/entrance-offset candidates and supported stall assignments are scored.
+Branch and connector candidates are selected with deterministic heuristics, not
+global mathematical optimization.
 
-It may also add multiple perpendicular branches from the main aisle. Each branch
-must fit inside the usable site, connect to the main aisle, avoid conflicts with
-existing branch geometry, pass traffic graph validation, improve the score, and
-reserve its own end turnaround.
-
-When same-side branches are selected, the solver may add a connector aisle
-between adjacent branch ends. This can form a simple U-shaped loop when the
-extra aisle reduces the dead-end penalty enough to offset any lost stalls or
-added aisle area. Once a connector is accepted, the endpoint branch turnaround
-pads are removed because those branches are no longer dead ends. The connector
-can also serve conservative 90-degree stalls along its sides when there is room
-after leaving a clear throat at both junctions. When L-shaped end-stall support
-is enabled, connector-side stalls may also use one-sided turning clearance near
-the junction instead of requiring the full symmetric turning rectangle.
-
-Branch start positions are auto-sampled by default. You can also control the
-sampling with:
-
-```json
-"optimization": {
-  "branch_start_step": 2.5,
-  "branch_sides": ["left", "right"],
-  "max_branches": 2,
-  "enable_connectors": true,
-  "connector_inset_depths": [0, 2.65, 5.3, 7.95],
-  "connector_throat_length": 3.0,
-  "connector_allow_l_shape_end_stalls": true,
-  "maneuver_l_shape_fallback": true,
-  "promote_candidate_layout_preview": true
-}
-```
-
-The report includes branch candidate reasons such as
-`branch_too_short_for_turnaround`, `branch_overlaps_existing_layout`, and
-`branch_does_not_improve_score`. Selected branches are listed in
-`selected_branches`; selected connector aisles are listed in
-`selected_connectors`, including removed turnaround pads and any stalls added
-along the connector.
-
-Layouts are selected by an explainable score, not only by stall count:
-
-```text
-score =
-  stall_count value
-  - aisle area penalty
-  - heading deviation penalty
-  - entrance offset penalty
-  - branch complexity penalty
-  - dead-end length penalty
-```
-
-The JSON report includes the full score breakdown.
-
-For Phase 1 explainability, the report also lists:
-
-- every generated aisle with its role and simple parent/entrance link,
-- every generated stall with the aisle that serves it,
-- unsupported Phase 1 input choices and the reason they were not generated.
-
-The report now includes a Phase 2A `traffic_graph` section. It validates whether
-generated aisles are reachable from an entrance, whether stalls reference
-existing aisles, whether stalls have an exit path, and whether dead ends are
-covered by turnaround pads.
-
-Phase 2B uses that graph validation as a hard candidate filter before scoring.
-Invalid candidates are skipped, and attempt diagnostics include `graph_valid`
-and `graph_errors`.
-
-Phase 3A adds a conservative maneuver-access check. For each generated stall,
-the solver finds the stall edge facing its serving aisle and projects a
-rectangular access envelope into the aisle. The envelope must be covered by
-drivable aisle geometry and stay inside the usable site area. Invalid stalls are
-filtered before graph validation and scoring.
-
-Phase 3B adds a conservative turning-sweep proxy. It expands that stall-front
-envelope along the aisle direction on both sides, so side obstacles or aisle-end
-clips can invalidate a stall even when the immediate front rectangle is clear.
-For 90-degree perpendicular stalls, the validator now has an optional
-`perpendicular_90_l_shape_proxy` fallback: if the full symmetric turning proxy
-fails only because one end is clipped, it tries the stall-front rectangle plus
-one side of turning clearance.
-
-Phase 3C-1 routes stalls through explicit maneuver rules. The active rule is
-currently `perpendicular_90_proxy`, with the L-shaped fallback reported as
-`perpendicular_90_l_shape_proxy` when it is used. Phase 3C-2 also adds an
-active `angled_proxy` validator rule for angled stall geometry. Phase 3D-1 can
-generate angled stalls along the main aisle, and Phase 3D-2 extends angled
-generation to branch aisles. Connector-side angled stalls, parallel stalls,
-T-end stalls, and non-90 perpendicular stalls remain future work and are
-reported with explicit reasons if encountered.
-
-Phase 3E compares enabled stall type candidates. If the input JSON enables more
-than one stall type, the solver tries each candidate independently, runs the
-same geometry, maneuver, graph, and scoring pipeline, then selects the
-highest-scoring graph-valid layout. The report includes
-`selected_stall_type_id` and `stall_type_attempts` so the choice is visible.
-
-Phase 3F-1 compares stall type assignments by aisle role. With multiple enabled
-stall types, it now enumerates `main_stall_type x branch_stall_type`, tags every
-generated stall with `stall_type_id`, validates each stall with the matching
-maneuver rule, and reports `selected_stall_assignment` plus
-`stall_assignment_attempts`.
-
-Phase 4A-1 adds a candidate-object snapshot layer. The solver now reports
-selected aisle/stall objects plus evaluated main, branch, and connector
-candidates in `candidate_snapshot`. This is the data layer for the later
-conflict matrix and optimizer; it does not yet change the selected layout.
-Phase 4A-2 adds that first conflict matrix: candidate objects with geometry now
-record overlapping object ids in `conflict_ids`, and the report includes
-`candidate_snapshot.conflict_matrix`.
-Phase 4B-1 adds a report-only shadow selector over branch and connector
-candidates. It uses the conflict matrix to choose a compatible candidate set and
-stores the result in `candidate_snapshot.selection`; it does not yet replace the
-current generated layout.
-Phase 4B-2A turns that shadow selection into a top-level
-`candidate_network_preview` report. The preview contains the current main
-aisle/turnaround plus any shadow-selected branch or connector candidates, but it
-is still preview-only and does not replace the DXF/SVG layout.
-Phase 4B-2B draws that preview network into the SVG as a translucent dashed
-debug overlay under `candidate-network-preview`, so the shadow road network can
-be inspected visually without changing the official generated layout.
-Phase 4B-3 validates the preview network as a temporary layout object. The
-report now includes `candidate_network_preview.validation` with internal
-conflict, geometry containment, and traffic graph checks.
-Phase 4C-1 adds `candidate_layout_preview`, a complete preview-only layout with
-candidate aisles, preview stalls, and validation for containment, stall
-association, maneuver access, and traffic graph reachability.
-Phase 4C-2A scores that preview layout with the same configured weights as the
-official layout and reports a comparison, including stall delta, score delta,
-and whether the preview is eligible for later promotion.
-Phase 4C-2B adds controlled promotion behind
-`optimization.promote_candidate_layout_preview`. When enabled, a preview layout
-can replace the official DXF/SVG/report output only if it is promotion-eligible;
-otherwise the original generated layout is kept and the rejection reason is
-reported in `candidate_layout_promotion`.
-The bundled `examples/phase0_site.json` now enables this flag so the U-shaped
-candidate loop is promoted into the official DXF/SVG/report output when its
-validated preview score is not lower than the greedy layout.
-Phase 4C-3A expands unconnected shadow branch candidates into separate branch
-aisle and end-turnaround preview aisles, so a branch can be promoted only after
-the traffic graph can see its turnaround.
-Phase 4C-3B makes the shadow selector dependency-aware: branch selection
-respects `optimization.max_branches`, and connector candidates are selected only
-when both endpoint branch source ids are already selected.
-Phase 4C-3C lets loop bundles compete with single branches. A bundle contains
-two branch candidates plus their connector candidate, receives a small loop
-bonus, and emits the same selected ids after it wins.
-Phase 4C-4A improves connector candidate availability. The candidate snapshot
-can synthesize report-only connector skeletons between compatible branch
-candidate sources when no generated connector candidate exists, and diagnostics
-now report connector candidate counts.
-Phase 4C-4B makes the connector preview explanation explicit: the network
-preview reports loop connector counts, connected branch source ids, and branch
-turnaround ids suppressed because a connector forms the return path.
-Phase 4C-4C moves U-shaped connector candidates inward by one stall depth when
-possible, controlled by `optimization.connector_allow_outer_stall_row`, so the
-outer side of the connector can generate parking instead of hugging the site
-edge.
-Phase 4C-4D turns that fixed inset into a small candidate search. You can set
-`optimization.connector_inset_depths` to explicit setback distances, or let the
-solver try flush, half-stall, one-stall, and one-and-a-half-stall connector
-positions automatically. Reports and previews now include
-`connector_inset_depth` so the selected U-connector position is auditable.
-Phase 5A adds `operational_quality`, a report-only soft-risk layer for junction
-and entrance-throat stall conflicts. The score includes `operational_risk` and
-`operational_risk_penalty`, but these checks do not hard-reject layouts yet.
-
-You can tune these maneuver checks with:
-
-```json
-"optimization": {
-  "maneuver_access_depth": 6.0,
-  "maneuver_access_coverage_ratio": 0.95,
-  "maneuver_turn_buffer_length": 2.5,
-  "maneuver_turn_coverage_ratio": 0.95,
-  "maneuver_angled_access_depth": 5.2,
-  "maneuver_angled_turn_buffer_length": 1.25,
-  "operational_junction_clearance_radius": 3.0,
-  "operational_entrance_clearance_radius": 4.0
-}
-```
-
-This is still conservative. It does not yet build arbitrary loops,
-intersections, narrow aisles, exact steering arcs, or swept-path turning checks.
-
-## Input Format
+The candidate layout is always reported as a preview. Replacing the official
+DXF/SVG/report layout is opt-in and defaults to disabled:
 
 ```json
 {
-  "version": "0.1",
-  "name": "phase1 site",
-  "units": "m",
-  "site": {
-    "boundary": {
-      "type": "polygon",
-      "points": [[0, 0], [64, 0], [64, 34], [50, 45], [10, 39], [0, 28]]
-    },
-    "obstacles": []
-  },
-  "entrances": [
-    {
-      "id": "main-gate",
-      "mode": "shared",
-      "center": [8, 0],
-      "width": 7.0,
-      "heading_degrees": 90,
-      "allowed_movements": ["enter", "exit"]
-    }
-  ],
-  "parking": {
-    "stall_types": [
-      {
-        "id": "standard-90",
-        "family": "perpendicular",
-        "width": 2.5,
-        "length": 5.3,
-        "allowed_angles": [90],
-        "enabled": true
-      }
-    ]
-  },
-  "aisles": {
-    "selection_mode": "fixed",
-    "fixed_class": "wide-two-way-no-cross",
-    "classes": [
-      {
-        "id": "wide-two-way-no-cross",
-        "width": 6.0,
-        "capacity": "two_vehicle",
-        "directionality": "two_way",
-        "centerline_crossing": "forbidden",
-        "enabled": true
-      }
-    ]
+  "optimization": {
+    "promote_candidate_layout_preview": true
   }
 }
 ```
 
-All dimensions are interpreted as meters.
+Promotion occurs only when the preview passes its configured geometry,
+maneuver, graph, and operational gates and is not worse under the current score.
+The bundled example deliberately enables promotion so the preview path remains
+exercised; other inputs must opt in explicitly.
 
-## Current Limitations
+## Validation modes and proxy boundary
 
-This is still an early algorithmic kernel. It now builds a graph for generated
-aisles and stalls, but it does not yet generate arbitrary road networks,
-intersections, narrow aisles, steering swept paths, turning-radius validation,
-hard operational-quality rejection, fire access validation, slopes, local code
-profiles, accessible stalls, or per-stall mixed parking module optimization.
+`optimization.operational_quality_mode` supports:
 
-## Design Notes
+- `score_only` (default): report and score Phase 5Q risks without rejecting the
+  official layout;
+- `promotion_gate`: keep the risks soft for the current layout but block preview
+  promotion when the configured risk limit is exceeded; and
+- `hard_reject`: treat a configured operational-risk limit violation as an
+  invalid solve and do not publish official output artifacts.
 
+Set `optimization.operational_max_risk_score` to establish the limit used by the
+gate/reject modes.
+
+These checks do not simulate traffic. Declared aisle links must make geometric
+contact before they become graph edges, but the traffic graph is still a static
+consistency and reachability check. Maneuver checks use clearance envelopes and
+Phase 5Q uses graph and geometry indicators. A reported pass therefore means
+“passes the implemented proxy,” not “a real vehicle can traverse the design” or
+“the design complies with a code.”
+
+## Input model
+
+Use [examples/phase0_site.json](examples/phase0_site.json) as the executable
+example and [docs/input_model.md](docs/input_model.md) as the field reference.
+All currently supported dimensions are interpreted as metres.
+
+The model intentionally accepts several fields ahead of enforcement so reports
+can expose unsupported requirements instead of silently discarding them. In
+particular, drawing pedestrian/fire reservation geometry does not constitute
+fire-lane or pedestrian-route validation.
+
+## Not implemented
+
+The current release does not provide:
+
+- arbitrary road-network synthesis, general intersections, multiple coordinated
+  entrances/exits, or a general loop optimizer;
+- exact steering arcs, vehicle kinematics, swept paths, or verified minimum
+  turning radius;
+- dynamic traffic, arrival/priority simulation, or capacity/queue analysis;
+- enforceable fire-access, pedestrian, accessibility, EV, slope, drainage, or
+  local-code profiles;
+- global CP-SAT/MIP optimization (the current selector is greedy/heuristic);
+- DXF/site-survey import, interactive editing, or a graphical application; or
+- certification that generated drawings are construction-ready or compliant.
+
+Parallel stalls, T-end stalls, connector-side angled stalls, and non-90-degree
+perpendicular stalls are also outside the active generation path.
+
+## Development
+
+```powershell
+.\.venv\Scripts\ruff.exe check .
+.\.venv\Scripts\python.exe -m pytest --cov=openparkcad --cov-report=term-missing
+.\.venv\Scripts\python.exe -m build
+```
+
+CI runs lint, tests with branch coverage, and an installed-wheel CLI smoke test
+on Python 3.10 and 3.12.
+
+## Design documents
+
+- [Current status and capability matrix](docs/current_status.md)
+- [Roadmap](docs/roadmap.md)
+- [Input model](docs/input_model.md)
 - [Algorithm design discussion](docs/algorithm_design_discussion.md)
-- [Phased implementation plan](docs/phased_plan.md)
+- [Detailed phased implementation history](docs/phased_plan.md)

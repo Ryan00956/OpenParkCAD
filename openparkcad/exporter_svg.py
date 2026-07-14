@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from pathlib import Path
 from math import cos, radians, sin
+from pathlib import Path
+from xml.sax.saxutils import escape
 
 from openparkcad.diagnostic_geometry import all_shape_points, pedestrian_emergency_shapes, site_feature_shapes
 from openparkcad.geometry import bounds
@@ -53,7 +54,10 @@ def write_svg(layout: LayoutResult, path: str | Path) -> None:
             f'<line x1="{start[0]:.3f}" y1="{start[1]:.3f}" x2="{end[0]:.3f}" y2="{end[1]:.3f}" '
             'stroke="#16a34a" stroke-width="0.4" stroke-linecap="round"/>'
         )
-        parts.append(f'<text x="{cx:.3f}" y="{cy - 1.0:.3f}" font-size="1.2" text-anchor="middle" fill="#166534">{entrance.id}</text>')
+        parts.append(
+            f'<text x="{cx:.3f}" y="{cy - 1.0:.3f}" font-size="1.2" '
+            f'text-anchor="middle" fill="#166534">{_xml_text(entrance.id)}</text>'
+        )
     for shape in diagnostic_shapes:
         style = _diagnostic_style(shape.layer)
         for poly in shape.polygons:
@@ -62,7 +66,10 @@ def write_svg(layout: LayoutResult, path: str | Path) -> None:
             parts.append(_polyline_svg([tx(point) for point in line], style["stroke"], style["stroke_width"]))
         if shape.label_point:
             cx, cy = tx(shape.label_point)
-            parts.append(f'<text x="{cx:.3f}" y="{cy - 0.6:.3f}" font-size="1.0" text-anchor="middle" fill="{style["stroke"]}">{shape.id}</text>')
+            parts.append(
+                f'<text x="{cx:.3f}" y="{cy - 0.6:.3f}" font-size="1.0" text-anchor="middle" '
+                f'fill="{_xml_attr(style["stroke"])}">{_xml_text(shape.id)}</text>'
+            )
     for aisle in layout.aisles:
         parts.append(_polygon_svg([tx(point) for point in aisle.polygon], "#e5e7eb", "#6b7280", 0.04))
     preview_aisles = _candidate_preview_aisles(layout)
@@ -84,7 +91,7 @@ def write_svg(layout: LayoutResult, path: str | Path) -> None:
             cx, cy = _centroid(poly)
             parts.append(
                 f'<text x="{cx:.3f}" y="{cy:.3f}" font-size="0.85" text-anchor="middle" '
-                f'fill="{style["stroke"]}">{aisle["id"]}</text>'
+                f'fill="{_xml_attr(style["stroke"])}">{_xml_text(aisle["id"])}</text>'
             )
         parts.append("</g>")
     preview_stalls = _candidate_layout_preview_stalls(layout)
@@ -105,13 +112,16 @@ def write_svg(layout: LayoutResult, path: str | Path) -> None:
             cx, cy = _centroid(poly)
             parts.append(
                 f'<text x="{cx:.3f}" y="{cy:.3f}" font-size="0.75" text-anchor="middle" '
-                f'fill="#9a3412">{stall["id"]}</text>'
+                f'fill="#9a3412">{_xml_text(stall["id"])}</text>'
             )
         parts.append("</g>")
     for stall in layout.stalls:
         parts.append(_polygon_svg([tx(point) for point in stall.polygon], "#dbeafe", "#1d4ed8", 0.06))
         cx, cy = _centroid([tx(point) for point in stall.polygon])
-        parts.append(f'<text x="{cx:.3f}" y="{cy:.3f}" font-size="0.82" text-anchor="middle" fill="#1e3a8a">{_display_stall_label(stall.id)}</text>')
+        parts.append(
+            f'<text x="{cx:.3f}" y="{cy:.3f}" font-size="0.82" text-anchor="middle" '
+            f'fill="#1e3a8a">{_xml_text(_display_stall_label(stall.id))}</text>'
+        )
     parts.append("</svg>")
 
     target.write_text("\n".join(parts), encoding="utf-8")
@@ -119,13 +129,27 @@ def write_svg(layout: LayoutResult, path: str | Path) -> None:
 
 def _polygon_svg(poly: Polygon, fill: str, stroke: str, stroke_width: float, opacity: float = 1.0, dasharray: str | None = None) -> str:
     points = " ".join(f"{x:.3f},{y:.3f}" for x, y in poly)
-    dash = f' stroke-dasharray="{dasharray}"' if dasharray else ""
-    return f'<polygon points="{points}" fill="{fill}" stroke="{stroke}" stroke-width="{stroke_width}" opacity="{opacity:.2f}"{dash}/>'
+    dash = f' stroke-dasharray="{_xml_attr(dasharray)}"' if dasharray else ""
+    return (
+        f'<polygon points="{_xml_attr(points)}" fill="{_xml_attr(fill)}" '
+        f'stroke="{_xml_attr(stroke)}" stroke-width="{stroke_width}" opacity="{opacity:.2f}"{dash}/>'
+    )
 
 
 def _polyline_svg(points: list[Point], stroke: str, stroke_width: float) -> str:
     point_text = " ".join(f"{x:.3f},{y:.3f}" for x, y in points)
-    return f'<polyline points="{point_text}" fill="none" stroke="{stroke}" stroke-width="{stroke_width}" stroke-dasharray="0.6 0.4"/>'
+    return (
+        f'<polyline points="{_xml_attr(point_text)}" fill="none" stroke="{_xml_attr(stroke)}" '
+        f'stroke-width="{stroke_width}" stroke-dasharray="0.6 0.4"/>'
+    )
+
+
+def _xml_text(value: object) -> str:
+    return escape(str(value), {'"': "&quot;", "'": "&apos;"})
+
+
+def _xml_attr(value: object) -> str:
+    return escape(str(value), {'"': "&quot;", "'": "&apos;"})
 
 
 def _centroid(poly: Polygon) -> Point:

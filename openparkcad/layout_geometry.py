@@ -13,8 +13,6 @@ def available_area(site: SiteSpec) -> ShapelyPolygon:
         boundary = boundary.buffer(0)
 
     usable = boundary.buffer(-site.margin, join_style="mitre")
-    if usable.is_empty:
-        usable = boundary
 
     obstacles = [ShapelyPolygon(item) for item in site.obstacles]
     if not obstacles:

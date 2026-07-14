@@ -918,23 +918,25 @@ use. Reports must be honest about which rules are active.
 
 ## 15. Phase Support Matrix
 
-The JSON should be future-proof, but implementation should be incremental.
+The JSON is intentionally future-facing, while implementation remains
+incremental. This matrix records the current implementation boundary; see
+[Current status](current_status.md) for the concise trust model.
 
 ```text
-Field or module                         Phase 1 status
+Field or module                         Current implementation status
 ------------------------------------------------------
 version / name / units                  active
 standards                               metadata only
 site.boundary polygon                   active
 site.boundary curve_loop / arc          documented, future
 site.obstacles polygon                  active
-site.reserved_areas                     parsed later
+site.reserved_areas                     documented, future
 site_features                           partially active for passing bay markers, otherwise drawn only
 entrances center / width / heading      active for straight main aisle
-pedestrian routes                       reserved no-parking later
-fire lanes                              reserved no-parking later
+pedestrian routes                       drawn, not enforced
+fire lanes                              drawn, not enforced
 parking.stall_types standard-90         active
-parking angled maneuver rule            active as validator-only proxy
+parking angled maneuver rule            active proxy for generated main/branch stalls
 parking angled main-aisle generation    active, main aisle only
 parking angled branch generation        active
 parking angled connector generation     documented, future
@@ -1040,7 +1042,9 @@ so. Silent partial support is dangerous for a design tool.
 
 ## 16. Open Questions
 
-These should be decided before implementation goes too far.
+These are retained as historical and remaining design questions. Current
+decisions and supported behavior take precedence in `current_status.md`, the
+runtime diagnostics, and regression tests.
 
 1. Should entrance geometry be defined by `center + width + heading`, by boundary
    edge segment, or should both be supported?
@@ -1066,22 +1070,20 @@ These should be decided before implementation goes too far.
 8. Should fire lanes and pedestrian routes be hard no-parking areas in Phase 1,
    or should they stay documented-only until the graph model exists?
 
-## 17. Recommendation for the Next Implementation Step
+## 17. Current Next Step
 
-For the first parser update, support this subset:
+The original Phase 0 parser subset is implemented. The next input-model work is
+to version the accepted shape with a machine-readable JSON Schema and turn
+already accepted design intent into enforceable constraints, in this order:
 
 ```text
-standards as metadata
-site.boundary.type = polygon
-site.obstacles[].geometry.type = polygon
-entrances[].center / width / heading_degrees / mode
-vehicles.design_vehicle.length / width / min_turning_radius
-parking.stall_types[]
-aisles.selection_mode = fixed
-aisles.fixed_class = wide-two-way-no-cross
-constraints.circulation.allow_narrow_two_way = false
-diagnostics.report_constraint_status = true
+obstacle and site-feature clearances
+reserved, pedestrian, and fire-access areas
+vehicle turning radius / swept path / reverse distance
+accessible and EV quotas
+versioned standards profiles with traceable sources
 ```
 
-Document curve support now, but implement it after the polygon-based parser is
-stable. This keeps the format future-proof without delaying Phase 0.
+New vocabulary should not be added without an explicit support status and a
+report-visible failure mode. The release sequence is maintained in
+[Roadmap](roadmap.md).

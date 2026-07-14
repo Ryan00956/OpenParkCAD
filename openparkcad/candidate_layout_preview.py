@@ -264,7 +264,12 @@ def _layout_comparison(
     score_delta = preview_score_total - current_score_total
     stall_delta = len(stalls) - layout.stall_count
     validation_valid = bool(validation.get("valid"))
-    promotion_blockers = _promotion_blockers(validation, score_delta)
+    promotion_blockers = _promotion_blockers(
+        validation,
+        score_delta,
+        aisle_count=len(aisles),
+        stall_count=len(stalls),
+    )
     return {
         "version": "phase4c-2a",
         "status": "preview_only",
@@ -287,8 +292,17 @@ def _layout_comparison(
     }
 
 
-def _promotion_blockers(validation: dict[str, object], score_delta: float) -> list[str]:
+def _promotion_blockers(
+    validation: dict[str, object],
+    score_delta: float,
+    aisle_count: int | None = None,
+    stall_count: int | None = None,
+) -> list[str]:
     blockers: list[str] = []
+    if aisle_count is not None and aisle_count <= 0:
+        blockers.append("preview_layout_has_no_aisles")
+    if stall_count is not None and stall_count <= 0:
+        blockers.append("preview_layout_has_no_stalls")
     if not bool(validation.get("valid")):
         blockers.append("preview_validation_failed")
     blockers.extend(_operational_quality_blockers(validation))

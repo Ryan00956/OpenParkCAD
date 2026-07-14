@@ -8,17 +8,20 @@ from openparkcad.candidate_layout_preview import build_candidate_layout_preview,
 from openparkcad.candidate_network_preview import build_candidate_network_preview
 from openparkcad.candidate_selector import select_candidate_objects
 from openparkcad.layout_geometry import available_area, normalized_local_box_to_world, polygon_points
+from openparkcad.maneuver_validation import validate_maneuvers
 from openparkcad.models import CandidateObject, LayoutResult, ParkingAisle, ParkingStall, Polygon
+from openparkcad.operational_quality import operational_quality_report
+from openparkcad.scoring import score_layout
+from openparkcad.traffic_graph import build_traffic_graph, validate_traffic_graph
 
 
 def attach_candidate_snapshot(layout: LayoutResult) -> LayoutResult:
     objects = build_candidate_objects(layout)
     selection = select_candidate_objects(objects, layout.site)
-    object.__setattr__(layout, "candidate_objects", objects)
-    object.__setattr__(layout, "candidate_selection", selection)
-    object.__setattr__(layout, "candidate_network_preview", build_candidate_network_preview(layout))
-    object.__setattr__(layout, "candidate_layout_preview", build_candidate_layout_preview(layout))
-    return _maybe_promote_candidate_layout(layout)
+    enriched = replace(layout, candidate_objects=objects, candidate_selection=selection)
+    enriched = replace(enriched, candidate_network_preview=build_candidate_network_preview(enriched))
+    enriched = replace(enriched, candidate_layout_preview=build_candidate_layout_preview(enriched))
+    return _maybe_promote_candidate_layout(enriched)
 
 
 def build_candidate_objects(layout: LayoutResult) -> list[CandidateObject]:
@@ -48,31 +51,155 @@ def candidate_snapshot_report(layout: LayoutResult) -> dict[str, object]:
 
 def _maybe_promote_candidate_layout(layout: LayoutResult) -> LayoutResult:
     if not layout.site.optimization.get("promote_candidate_layout_preview", False):
-        object.__setattr__(layout, "candidate_layout_promotion", _promotion_report(layout, "not_requested"))
-        return layout
+        return replace(layout, candidate_layout_promotion=_promotion_report(layout, "not_requested"))
 
     comparison = layout.candidate_layout_preview.get("comparison", {})
     if not isinstance(comparison, dict) or not comparison.get("promotion_eligible"):
-        object.__setattr__(layout, "candidate_layout_promotion", _promotion_report(layout, "rejected"))
-        return layout
+        return replace(layout, candidate_layout_promotion=_promotion_report(layout, "rejected"))
 
     preview_layout = candidate_layout_preview_layout(layout)
-    validation = layout.candidate_layout_preview.get("validation", {})
-    graph = validation.get("traffic_graph", {}) if isinstance(validation, dict) else {}
-    maneuver = validation.get("maneuver_validation", {}) if isinstance(validation, dict) else {}
-    operational = validation.get("operational_quality", {}) if isinstance(validation, dict) else {}
     promoted = replace(
         layout,
         aisles=preview_layout.aisles,
         stalls=preview_layout.stalls,
         generation_mode="candidate_layout_promoted",
-        score=_preview_score(layout),
-        graph_validation=graph if isinstance(graph, dict) else {},
-        maneuver_validation=maneuver if isinstance(maneuver, dict) else {},
-        operational_quality=operational if isinstance(operational, dict) else {},
-        candidate_layout_promotion=_promotion_report(layout, "promoted"),
     )
-    return promoted
+    promoted = _with_recomputed_validation(promoted)
+
+    # Candidate selection describes the pre-promotion decision, while selected
+    # aisle/stall objects must describe the official post-promotion layout.
+    # Rebuilding the snapshot keeps both views in one self-consistent report.
+    official_objects = build_candidate_objects(promoted)
+    official_selection = select_candidate_objects(official_objects, promoted.site)
+    promoted = replace(
+        promoted,
+        candidate_objects=official_objects,
+        candidate_selection=official_selection,
+        selected_branches=_official_selected_branches(layout),
+        selected_connectors=_official_selected_connectors(layout),
+        candidate_network_preview=_promoted_network_preview(layout),
+        candidate_layout_preview=_promoted_layout_preview(layout, promoted),
+    )
+    return replace(promoted, candidate_layout_promotion=_promotion_report(promoted, "promoted"))
+
+
+def _with_recomputed_validation(layout: LayoutResult) -> LayoutResult:
+    maneuver = validate_maneuvers(layout)
+    preview_validation = layout.candidate_layout_preview.get("validation", {})
+    if isinstance(preview_validation, dict):
+        preview_maneuver = preview_validation.get("maneuver_validation", {})
+        if isinstance(preview_maneuver, dict):
+            for key in ("filtered_stall_ids", "filtered_stall_count", "pre_filter_invalid_stalls"):
+                if key in preview_maneuver:
+                    maneuver[key] = preview_maneuver[key]
+    graph = validate_traffic_graph(build_traffic_graph(layout), layout)
+    operational = operational_quality_report(layout)
+    validated = replace(
+        layout,
+        maneuver_validation=maneuver,
+        graph_validation=graph,
+        operational_quality=operational,
+    )
+    return replace(validated, score=score_layout(validated))
+
+
+def _promoted_network_preview(source: LayoutResult) -> dict[str, object]:
+    preview = dict(source.candidate_network_preview)
+    preview["status"] = "promoted_to_official"
+    preview["official_output_replaced"] = True
+    preview["official_aisle_ids"] = [str(item.get("id")) for item in _preview_aisles(source)]
+    preview["notes"] = [
+        "This candidate network was validated and promoted to the official layout.",
+        "candidate_id and source_id retain the pre-promotion decision provenance.",
+    ]
+    return preview
+
+
+def _promoted_layout_preview(source: LayoutResult, official: LayoutResult) -> dict[str, object]:
+    preview = dict(source.candidate_layout_preview)
+    preview["status"] = "promoted_to_official"
+    preview["official_output_replaced"] = True
+    preview["official_aisle_ids"] = [aisle.id for aisle in official.aisles]
+    preview["official_stall_ids"] = [stall.id for stall in official.stalls]
+    preview["score"] = dict(official.score)
+    comparison = dict(preview.get("comparison", {})) if isinstance(preview.get("comparison"), dict) else {}
+    comparison["status"] = "promoted_to_official"
+    comparison["candidate_preview"] = {
+        "stall_count": official.stall_count,
+        "aisle_count": len(official.aisles),
+        "score_total": float(official.score.get("total", 0.0)),
+        "validation_valid": True,
+    }
+    preview["comparison"] = comparison
+    validation = dict(preview.get("validation", {})) if isinstance(preview.get("validation"), dict) else {}
+    validation.update(
+        {
+            "status": "official",
+            "valid": bool(
+                official.graph_validation.get("valid")
+                and official.maneuver_validation.get("valid")
+                and official.operational_quality.get("valid", True)
+            ),
+            "traffic_graph": official.graph_validation,
+            "maneuver_validation": official.maneuver_validation,
+            "operational_quality": official.operational_quality,
+        }
+    )
+    preview["validation"] = validation
+    preview["notes"] = [
+        "This candidate layout was validated and promoted to the official DXF, SVG, and report output.",
+        "source_id values retain the pre-promotion candidate provenance.",
+    ]
+    return preview
+
+
+def _preview_aisles(layout: LayoutResult) -> list[dict[str, object]]:
+    raw = layout.candidate_network_preview.get("aisles", [])
+    if not isinstance(raw, list):
+        return []
+    return [item for item in raw if isinstance(item, dict) and item.get("id")]
+
+
+def _official_aisle_id_by_source(layout: LayoutResult) -> dict[str, str]:
+    return {
+        str(item.get("source_id")): str(item["id"])
+        for item in _preview_aisles(layout)
+        if item.get("source_id") is not None
+    }
+
+
+def _official_selected_branches(layout: LayoutResult) -> list[dict[str, object]]:
+    official_by_source = _official_aisle_id_by_source(layout)
+    selected: list[dict[str, object]] = []
+    for branch in layout.selected_branches:
+        source_id = str(branch.get("id", ""))
+        official_id = official_by_source.get(source_id)
+        if not official_id:
+            continue
+        selected.append({**branch, "id": official_id, "source_id": source_id})
+    return selected
+
+
+def _official_selected_connectors(layout: LayoutResult) -> list[dict[str, object]]:
+    official_by_source = _official_aisle_id_by_source(layout)
+    selected: list[dict[str, object]] = []
+    for connector in layout.selected_connectors:
+        source_id = str(connector.get("id", ""))
+        official_id = official_by_source.get(source_id)
+        if not official_id:
+            continue
+        source_connects = [str(item) for item in connector.get("connects", [])]
+        official_connects = [official_by_source[item] for item in source_connects if item in official_by_source]
+        selected.append(
+            {
+                **connector,
+                "id": official_id,
+                "source_id": source_id,
+                "source_connects": source_connects,
+                "connects": official_connects,
+            }
+        )
+    return selected
 
 
 def _promotion_report(layout: LayoutResult, status: str) -> dict[str, object]:
@@ -82,7 +209,7 @@ def _promotion_report(layout: LayoutResult, status: str) -> dict[str, object]:
     blockers = comparison.get("promotion_blockers", [])
     if not isinstance(blockers, list):
         blockers = []
-    return {
+    report: dict[str, object] = {
         "version": "phase4c-2b",
         "requested": bool(layout.site.optimization.get("promote_candidate_layout_preview", False)),
         "status": status,
@@ -92,6 +219,19 @@ def _promotion_report(layout: LayoutResult, status: str) -> dict[str, object]:
         "blockers": [str(item) for item in blockers],
         "official_output_replaced": status == "promoted",
     }
+    if status == "promoted":
+        report.update(
+            {
+                "official_aisle_ids": [aisle.id for aisle in layout.aisles],
+                "official_stall_ids": [stall.id for stall in layout.stalls],
+                "candidate_to_official_aisle_ids": {
+                    str(item.get("candidate_id")): str(item["id"])
+                    for item in _preview_aisles(layout)
+                    if item.get("candidate_id") is not None
+                },
+            }
+        )
+    return report
 
 
 def _promotion_reason(status: str, comparison: dict[str, object]) -> str:
@@ -101,17 +241,6 @@ def _promotion_reason(status: str, comparison: dict[str, object]) -> str:
         return "candidate_layout_preview_promoted_to_official_output"
     reason = comparison.get("reason")
     return str(reason) if reason else "candidate_layout_preview_not_promotion_eligible"
-
-
-def _preview_score(layout: LayoutResult) -> dict[str, float]:
-    score = layout.candidate_layout_preview.get("score")
-    if not isinstance(score, dict):
-        return dict(layout.score)
-    return {
-        str(key): float(value)
-        for key, value in score.items()
-        if isinstance(value, int | float)
-    }
 
 
 def _main_attempt_candidates(layout: LayoutResult) -> list[CandidateObject]:
@@ -478,14 +607,24 @@ def _with_conflicts(objects: list[CandidateObject]) -> list[CandidateObject]:
 
 
 def _conflict_matrix(objects: list[CandidateObject]) -> list[dict[str, object]]:
+    object_by_id = {item.id: item for item in objects}
+    seen: set[tuple[str, str]] = set()
     conflicts: list[dict[str, object]] = []
-    for index, left in enumerate(objects):
-        for right in objects[index + 1 :]:
+    for left in objects:
+        for right_id in left.conflict_ids:
+            first_id, second_id = sorted((left.id, right_id))
+            pair = (first_id, second_id)
+            if pair in seen:
+                continue
+            seen.add(pair)
+            right = object_by_id.get(right_id)
+            if right is None:
+                continue
             conflict = _geometry_conflict(left, right)
             if conflict is None:
                 continue
             conflicts.append(conflict)
-    return conflicts
+    return sorted(conflicts, key=lambda item: (str(item["left_id"]), str(item["right_id"])))
 
 
 def _geometry_conflict(left: CandidateObject, right: CandidateObject) -> dict[str, object] | None:

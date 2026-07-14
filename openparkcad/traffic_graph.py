@@ -1,9 +1,15 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
+import math
 from typing import Any
 
-from openparkcad.models import LayoutResult, ParkingAisle, Point, SiteSpec
+from shapely.geometry import LineString, Point as ShapelyPoint, Polygon as ShapelyPolygon
+
+from openparkcad.models import EntranceSpec, LayoutResult, ParkingAisle, Point, SiteSpec
+
+
+_AISLE_CONNECTION_TOLERANCE = 1e-7
 
 
 @dataclass(frozen=True)
@@ -41,9 +47,11 @@ class TrafficGraph:
 
 
 def build_traffic_graph(layout: LayoutResult) -> TrafficGraph:
-    """Build the first Phase 2 graph from Phase 1 layout metadata."""
+    """Build the first Phase 2 graph from declared, geometrically real connections."""
     nodes: list[TrafficNode] = []
     edges: list[TrafficEdge] = []
+    aisles_by_id = {aisle.id: aisle for aisle in layout.aisles}
+    entrances_by_id = {entrance.id: entrance for entrance in layout.site.entrances}
 
     for entrance in layout.site.entrances:
         nodes.append(
@@ -68,29 +76,35 @@ def build_traffic_graph(layout: LayoutResult) -> TrafficGraph:
     for aisle in layout.aisles:
         aisle_node_id = _aisle_node_id(aisle.id)
         if aisle.connected_to_entrance_id:
-            edges.append(_entrance_edge(layout.site, aisle, aisle_node_id))
+            entrance = entrances_by_id.get(aisle.connected_to_entrance_id)
+            if entrance is None or _entrance_touches_aisle(layout.site, entrance, aisle):
+                edges.append(_entrance_edge(layout.site, aisle, aisle_node_id))
         if aisle.parent_aisle_id:
-            edges.append(
-                TrafficEdge(
-                    id=f"E-PARENT-{aisle.parent_aisle_id}-{aisle.id}",
-                    from_node_id=_aisle_node_id(aisle.parent_aisle_id),
-                    to_node_id=aisle_node_id,
-                    directionality=_layout_aisle_directionality(layout.site),
-                    role="aisle_connection",
-                    aisle_id=aisle.id,
+            parent = aisles_by_id.get(aisle.parent_aisle_id)
+            if parent is None or _aisles_touch(aisle, parent):
+                edges.append(
+                    TrafficEdge(
+                        id=f"E-PARENT-{aisle.parent_aisle_id}-{aisle.id}",
+                        from_node_id=_aisle_node_id(aisle.parent_aisle_id),
+                        to_node_id=aisle_node_id,
+                        directionality=_layout_aisle_directionality(layout.site),
+                        role="aisle_connection",
+                        aisle_id=aisle.id,
+                    )
                 )
-            )
         for connected_aisle_id in aisle.connected_aisle_ids:
-            edges.append(
-                TrafficEdge(
-                    id=f"E-CONNECTOR-{aisle.id}-{connected_aisle_id}",
-                    from_node_id=aisle_node_id,
-                    to_node_id=_aisle_node_id(connected_aisle_id),
-                    directionality=_layout_aisle_directionality(layout.site),
-                    role="aisle_connection",
-                    aisle_id=aisle.id,
+            connected = aisles_by_id.get(connected_aisle_id)
+            if connected is None or _aisles_touch(aisle, connected):
+                edges.append(
+                    TrafficEdge(
+                        id=f"E-CONNECTOR-{aisle.id}-{connected_aisle_id}",
+                        from_node_id=aisle_node_id,
+                        to_node_id=_aisle_node_id(connected_aisle_id),
+                        directionality=_layout_aisle_directionality(layout.site),
+                        role="aisle_connection",
+                        aisle_id=aisle.id,
+                    )
                 )
-            )
 
     aisle_ids = {aisle.id for aisle in layout.aisles}
     stall_access = [
@@ -129,6 +143,8 @@ def validate_traffic_graph(graph: TrafficGraph, layout: LayoutResult) -> dict[st
         for access in graph.stall_access
         if not access.aisle_id or access.aisle_id not in aisle_ids
     ]
+    disconnected_aisle_connections = _disconnected_aisle_connections(layout)
+    disconnected_entrance_connections = _disconnected_entrance_connections(layout)
 
     reachable_from_entries = _reachable_nodes(graph, entry_nodes, reverse=False)
     can_reach_exits = _reachable_nodes(graph, exit_nodes, reverse=True)
@@ -158,12 +174,18 @@ def validate_traffic_graph(graph: TrafficGraph, layout: LayoutResult) -> dict[st
         errors.append("aisle_references_missing_entrance")
     if missing_aisles:
         errors.append("stall_references_missing_aisle")
+    if disconnected_aisle_connections:
+        errors.append("aisle_connections_do_not_touch")
+    if disconnected_entrance_connections:
+        errors.append("entrance_connections_do_not_touch")
     if unreachable_aisles:
         errors.append("unreachable_aisles")
     if unreachable_stalls:
         errors.append("unreachable_stalls")
     if layout.stalls and no_exit_stalls:
         errors.append("stalls_without_exit_path")
+    if any(item["status"] == "dead_end_without_turnaround" for item in dead_ends):
+        errors.append("dead_end_without_turnaround")
 
     return {
         "valid": not errors,
@@ -180,6 +202,8 @@ def validate_traffic_graph(graph: TrafficGraph, layout: LayoutResult) -> dict[st
         "missing_edge_nodes": missing_edge_nodes,
         "missing_entrances": sorted(set(missing_entrances)),
         "stalls_missing_aisles": sorted(missing_aisles),
+        "disconnected_aisle_connections": disconnected_aisle_connections,
+        "disconnected_entrance_connections": disconnected_entrance_connections,
         "dead_ends": dead_ends,
     }
 
@@ -208,6 +232,8 @@ def traffic_graph_summary(layout: LayoutResult) -> dict[str, Any]:
         "unreachable_aisles": validation["unreachable_aisles"],
         "unreachable_stalls": validation["unreachable_stalls"],
         "stalls_without_exit_path": validation["stalls_without_exit_path"],
+        "disconnected_aisle_connections": validation["disconnected_aisle_connections"],
+        "disconnected_entrance_connections": validation["disconnected_entrance_connections"],
         "dead_ends": validation["dead_ends"],
     }
 
@@ -282,16 +308,115 @@ def _dead_ends(graph: TrafficGraph, layout: LayoutResult) -> list[dict[str, Any]
                 }
             )
         elif undirected_degree.get(node_id, 0) <= 1:
+            dead_end_allowed = _allows_dead_end_aisles(layout.site)
             items.append(
                 {
                     "aisle_id": aisle.id,
                     "node_id": node_id,
                     "parent_aisle_id": aisle.parent_aisle_id,
                     "turnaround_present": False,
-                    "status": "dead_end_without_turnaround",
+                    "status": "allowed_dead_end" if dead_end_allowed else "dead_end_without_turnaround",
                 }
             )
     return items
+
+
+def _disconnected_aisle_connections(layout: LayoutResult) -> list[dict[str, Any]]:
+    aisles_by_id = {aisle.id: aisle for aisle in layout.aisles}
+    disconnected: list[dict[str, Any]] = []
+    for aisle in layout.aisles:
+        declarations = []
+        if aisle.parent_aisle_id:
+            declarations.append(("parent", aisle.parent_aisle_id))
+        declarations.extend(("connected", aisle_id) for aisle_id in aisle.connected_aisle_ids)
+        for relationship, related_aisle_id in declarations:
+            related = aisles_by_id.get(related_aisle_id)
+            if related is None or _aisles_touch(aisle, related):
+                continue
+            disconnected.append(
+                {
+                    "aisle_id": aisle.id,
+                    "related_aisle_id": related_aisle_id,
+                    "relationship": relationship,
+                    "distance": _aisle_distance(aisle, related),
+                }
+            )
+    return disconnected
+
+
+def _disconnected_entrance_connections(layout: LayoutResult) -> list[dict[str, Any]]:
+    entrances_by_id = {entrance.id: entrance for entrance in layout.site.entrances}
+    disconnected: list[dict[str, Any]] = []
+    for aisle in layout.aisles:
+        if not aisle.connected_to_entrance_id:
+            continue
+        entrance = entrances_by_id.get(aisle.connected_to_entrance_id)
+        if entrance is None or _entrance_touches_aisle(layout.site, entrance, aisle):
+            continue
+        disconnected.append(
+            {
+                "aisle_id": aisle.id,
+                "entrance_id": entrance.id,
+                "distance": _entrance_aisle_distance(entrance, aisle),
+                "allowed_distance": _entrance_connection_tolerance(layout.site),
+            }
+        )
+    return disconnected
+
+
+def _aisles_touch(left: ParkingAisle, right: ParkingAisle) -> bool:
+    distance = _aisle_distance(left, right)
+    return distance is not None and distance <= _AISLE_CONNECTION_TOLERANCE
+
+
+def _aisle_distance(left: ParkingAisle, right: ParkingAisle) -> float | None:
+    try:
+        left_geometry = ShapelyPolygon(left.polygon)
+        right_geometry = ShapelyPolygon(right.polygon)
+    except (TypeError, ValueError):
+        return None
+    if left_geometry.is_empty or right_geometry.is_empty:
+        return None
+    return float(left_geometry.distance(right_geometry))
+
+
+def _entrance_touches_aisle(site: SiteSpec, entrance: EntranceSpec, aisle: ParkingAisle) -> bool:
+    distance = _entrance_aisle_distance(entrance, aisle)
+    return distance is not None and distance <= _entrance_connection_tolerance(site)
+
+
+def _entrance_aisle_distance(entrance: EntranceSpec, aisle: ParkingAisle) -> float | None:
+    try:
+        aisle_geometry = ShapelyPolygon(aisle.polygon)
+    except (TypeError, ValueError):
+        return None
+    if aisle_geometry.is_empty:
+        return None
+    normal = math.radians(float(entrance.heading_degrees) + 90.0)
+    half_width = max(float(entrance.width), 0.0) / 2.0
+    dx = math.cos(normal) * half_width
+    dy = math.sin(normal) * half_width
+    if half_width <= _AISLE_CONNECTION_TOLERANCE:
+        entrance_geometry = ShapelyPoint(float(entrance.center[0]), float(entrance.center[1]))
+    else:
+        entrance_geometry = LineString(
+            [
+                (float(entrance.center[0]) - dx, float(entrance.center[1]) - dy),
+                (float(entrance.center[0]) + dx, float(entrance.center[1]) + dy),
+            ]
+        )
+    return float(entrance_geometry.distance(aisle_geometry))
+
+
+def _entrance_connection_tolerance(site: SiteSpec) -> float:
+    return max(float(site.margin), 0.0) + _AISLE_CONNECTION_TOLERANCE
+
+
+def _allows_dead_end_aisles(site: SiteSpec) -> bool:
+    circulation = site.constraints.get("circulation", {})
+    if not isinstance(circulation, dict):
+        return False
+    return circulation.get("allow_dead_end_aisles") is True
 
 
 def _layout_aisle_directionality(site: SiteSpec) -> str:

@@ -410,7 +410,6 @@ def _parking_aisle_from_preview(
     metadata = preview.get("metadata", {})
     if not isinstance(metadata, dict):
         metadata = {}
-    source_id = str(preview.get("source_id"))
     parent_aisle_id = _mapped_parent_id(preview, source_to_preview_id)
     connected_aisle_ids = _mapped_connected_ids(metadata, source_to_preview_id)
     connected_to_entrance_id = None
