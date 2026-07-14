@@ -2,14 +2,18 @@ from __future__ import annotations
 
 import math
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from shapely.geometry import LineString, Polygon as ShapelyPolygon
 from shapely.ops import unary_union
 
 from openparkcad.layout_geometry import area_overlaps, available_area, polygon_points
-from openparkcad.models import LayoutResult, ParkingStall, SiteSpec, StallSpec
+from openparkcad.models import LayoutResult, ParkingStall, SiteSpec, StallSpec, VehicleSpec
+from openparkcad.phase1_support import fixed_aisle_class
+from openparkcad.site_constraints import constraint_conflicts, site_usable_area
+from openparkcad.swept_path import resolve_vehicle_overhangs, validate_stall_swept_path
+from openparkcad.vehicle_kinematics import rear_axle_turning_radius
 
 
 @dataclass(frozen=True)
@@ -18,6 +22,7 @@ class ManeuverContext:
     aisle_by_id: dict[str, ShapelyPolygon]
     drivable: Any
     usable: Any
+    swept_usable: Any
 
 
 @dataclass(frozen=True)
@@ -26,6 +31,21 @@ class ManeuverRule:
     family: str
     status: str
     evaluate: Callable[[ManeuverContext, ParkingStall], dict[str, Any]]
+
+
+@dataclass(frozen=True)
+class VehicleCheckPolicy:
+    require_turning_radius: bool
+    require_swept_path: bool
+    require_reverse_distance: bool
+    maximum_reverse_distance: float | None
+    configuration_error: str | None = None
+    declared_turning_radius: bool = False
+    declared_swept_path: bool = False
+
+    @property
+    def requested(self) -> bool:
+        return self.require_turning_radius or self.require_swept_path or self.require_reverse_distance
 
 
 def apply_maneuver_filter(layout: LayoutResult) -> LayoutResult:
@@ -41,6 +61,17 @@ def apply_maneuver_filter(layout: LayoutResult) -> LayoutResult:
     post_validation["filtered_stall_ids"] = sorted(invalid_ids)
     post_validation["filtered_stall_count"] = len(invalid_ids)
     post_validation["pre_filter_invalid_stalls"] = validation["invalid_stalls"]
+    post_validation["pre_filter_vehicle_validation"] = validation.get("vehicle_validation", {})
+    pre_vehicle = validation.get("vehicle_validation", {})
+    if (
+        not kept_stalls
+        and isinstance(pre_vehicle, dict)
+        and int(pre_vehicle.get("invalid_stall_count", 0)) > 0
+    ):
+        rejected_vehicle = dict(pre_vehicle)
+        rejected_vehicle["result_scope"] = "all_generated_stalls_rejected"
+        post_validation["vehicle_validation"] = rejected_vehicle
+        post_validation["valid"] = False
     object.__setattr__(layout, "maneuver_validation", post_validation)
     return layout
 
@@ -54,10 +85,14 @@ def validate_maneuvers(layout: LayoutResult) -> dict[str, Any]:
         aisle_by_id=aisle_by_id,
         drivable=drivable,
         usable=usable,
+        swept_usable=site_usable_area(layout.site, "swept_path"),
     )
     invalid: list[dict[str, Any]] = []
     envelopes: list[dict[str, Any]] = []
     rule_counts: dict[str, int] = {}
+    vehicle_checks: list[dict[str, Any]] = []
+    vehicle_rule_counts: dict[str, int] = {}
+    vehicle_policy = _vehicle_check_policy(layout.site)
 
     for stall in layout.stalls:
         rule = _rule_for_stall(layout.site, stall)
@@ -93,13 +128,24 @@ def validate_maneuvers(layout: LayoutResult) -> dict[str, Any]:
                 envelope_result = fallback_result
                 failure_reason = None
 
+        vehicle_check = _validate_vehicle_maneuver(context, stall, vehicle_policy)
+        if vehicle_check is not None:
+            record["vehicle_validation"] = vehicle_check
+            vehicle_checks.append(vehicle_check)
+            vehicle_rule_id = str(vehicle_check.get("rule_id", "unknown"))
+            _increment_rule_count(vehicle_rule_counts, vehicle_rule_id)
+            if failure_reason is None and not vehicle_check.get("valid", False):
+                failure_reason = str(vehicle_check.get("reason") or "vehicle_maneuver_invalid")
+
         _increment_rule_count(rule_counts, str(record["rule_id"]))
         envelopes.append(record)
         if failure_reason is not None:
             invalid.append({**record, "reason": failure_reason})
 
+    vehicle_validation = _vehicle_validation_summary(layout.site, vehicle_policy, vehicle_checks)
     return {
-        "valid": not invalid,
+        "version": "v0.3-maneuver-validation-1",
+        "valid": not invalid and vehicle_validation["valid"],
         "checked_stalls": len(layout.stalls),
         "invalid_stalls": invalid,
         "access_depth": _access_depth(layout.site),
@@ -109,6 +155,8 @@ def validate_maneuvers(layout: LayoutResult) -> dict[str, Any]:
         "rule_counts": rule_counts,
         "rule_support": _rule_support_report(layout.site),
         "envelopes": envelopes,
+        "vehicle_validation": vehicle_validation,
+        "vehicle_rule_counts": vehicle_rule_counts,
     }
 
 
@@ -589,6 +637,274 @@ def _active_angled_angle(stall_spec: StallSpec) -> float:
         if 1e-6 < normalized < 180 - 1e-6 and abs(normalized - 90.0) > 1e-6:
             return normalized
     return 60.0
+
+
+def _vehicle_check_policy(site: SiteSpec) -> VehicleCheckPolicy:
+    raw = site.constraints.get("maneuvering", {})
+    maneuvering = raw if isinstance(raw, dict) else {}
+    require_turning = _boolean_setting(maneuvering.get("require_turning_radius_check", False))
+    require_swept = _boolean_setting(maneuvering.get("require_swept_path_check", False))
+    configured_limit = maneuvering.get("max_reverse_distance")
+    vehicle_limit = site.vehicle.max_reverse_distance if site.vehicle else None
+    limits: list[float] = []
+    for value in (configured_limit, vehicle_limit):
+        if value is None:
+            continue
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return VehicleCheckPolicy(
+                require_turning_radius=True,
+                require_swept_path=require_swept,
+                require_reverse_distance=True,
+                maximum_reverse_distance=None,
+                configuration_error="invalid_maximum_reverse_distance",
+                declared_turning_radius=require_turning,
+                declared_swept_path=require_swept,
+            )
+        if not math.isfinite(parsed) or parsed <= 0.0:
+            return VehicleCheckPolicy(
+                require_turning_radius=True,
+                require_swept_path=require_swept,
+                require_reverse_distance=True,
+                maximum_reverse_distance=None,
+                configuration_error="invalid_maximum_reverse_distance",
+                declared_turning_radius=require_turning,
+                declared_swept_path=require_swept,
+            )
+        limits.append(parsed)
+    return VehicleCheckPolicy(
+        require_turning_radius=require_turning or require_swept or bool(limits),
+        require_swept_path=require_swept,
+        require_reverse_distance=bool(limits),
+        maximum_reverse_distance=min(limits) if limits else None,
+        declared_turning_radius=require_turning,
+        declared_swept_path=require_swept,
+    )
+
+
+def _validate_vehicle_maneuver(
+    context: ManeuverContext,
+    stall: ParkingStall,
+    policy: VehicleCheckPolicy,
+) -> dict[str, Any] | None:
+    if not policy.requested:
+        return None
+    base: dict[str, Any] = {
+        "stall_id": stall.id,
+        "served_by_aisle_id": stall.served_by_aisle_id,
+        "requested": {
+            "turning_radius": policy.require_turning_radius,
+            "swept_path": policy.require_swept_path,
+            "reverse_distance": policy.require_reverse_distance,
+        },
+        "declared_requests": {
+            "turning_radius": policy.declared_turning_radius,
+            "swept_path": policy.declared_swept_path,
+            "reverse_distance": policy.require_reverse_distance,
+        },
+        "maximum_reverse_distance": policy.maximum_reverse_distance,
+    }
+    if policy.configuration_error:
+        return {**base, "valid": False, "reason": policy.configuration_error, "rule_id": "vehicle_input_v1"}
+    vehicle = context.site.vehicle
+    if vehicle is None:
+        return {**base, "valid": False, "reason": "design_vehicle_missing", "rule_id": "vehicle_input_v1"}
+
+    stall_spec = _stall_spec_for_stall(context.site, stall)
+    if stall_spec.family != "perpendicular" or not _angle_supported_for_perpendicular(stall_spec, stall):
+        return {
+            **base,
+            "valid": False,
+            "reason": "vehicle_maneuver_template_not_supported_for_stall",
+            "rule_id": "vehicle_template_dispatch_v1",
+            "stall_family": stall_spec.family,
+        }
+
+    effective_vehicle = replace(vehicle, max_reverse_distance=policy.maximum_reverse_distance)
+    if policy.require_swept_path:
+        return _exact_vehicle_check(context, stall, effective_vehicle, base)
+    return _analytic_vehicle_check(context.site, stall_spec, effective_vehicle, base)
+
+
+def _exact_vehicle_check(
+    context: ManeuverContext,
+    stall: ParkingStall,
+    vehicle: VehicleSpec,
+    base: dict[str, Any],
+) -> dict[str, Any]:
+    if not stall.served_by_aisle_id or stall.served_by_aisle_id not in context.aisle_by_id:
+        return {
+            **base,
+            "valid": False,
+            "reason": "serving_aisle_missing",
+            "rule_id": "reverse_in_90_bicycle_v1",
+        }
+    sample_step = _positive_setting(context.site.optimization.get("vehicle_swept_sample_step"), 0.35)
+    heading_step = _positive_setting(
+        context.site.optimization.get("vehicle_swept_heading_step_degrees"),
+        2.0,
+    )
+    crossing = _centerline_crossing_rule(context.site)
+    result = validate_stall_swept_path(
+        vehicle,
+        stall,
+        context.aisle_by_id[stall.served_by_aisle_id],
+        boundary=context.swept_usable,
+        drivable_area=context.drivable,
+        centerline_crossing=crossing,
+        require_explicit_track_width=True,
+        sample_step=sample_step,
+        max_heading_step_degrees=heading_step,
+    )
+    conflicts = []
+    if not result.envelope.is_empty:
+        conflicts = constraint_conflicts(context.site, result.envelope, "swept_path")
+    valid = result.valid and not conflicts
+    reason = result.reason
+    if result.valid and conflicts:
+        reason = "swept_path_hits_site_constraint"
+    include_trajectory = _boolean_setting(
+        context.site.diagnostics.get("include_vehicle_trajectories", False)
+    )
+    return {
+        **base,
+        "valid": valid,
+        "reason": reason,
+        "rule_id": "reverse_in_90_bicycle_v1",
+        "status": "active_exact",
+        "centerline_crossing": crossing,
+        "sample_step": sample_step,
+        "max_heading_step_degrees": heading_step,
+        "site_constraint_conflicts": conflicts,
+        "entry": result.to_record(
+            include_trajectory=include_trajectory,
+            include_geometry=False,
+        ),
+        "exit": {
+            "valid": valid,
+            "method": "time_reverse_of_validated_reverse_in_path",
+        },
+    }
+
+
+def _analytic_vehicle_check(
+    site: SiteSpec,
+    stall_spec: StallSpec,
+    vehicle: VehicleSpec,
+    base: dict[str, Any],
+) -> dict[str, Any]:
+    radius = rear_axle_turning_radius(vehicle, require_explicit_track_width=True)
+    footprint = resolve_vehicle_overhangs(vehicle)
+    reason: str | None = None
+    if not radius.valid or radius.rear_axle_radius is None:
+        reason = radius.reason or "minimum_turning_radius_unresolved"
+    elif not footprint.valid:
+        reason = footprint.reason or "vehicle_footprint_invalid"
+    elif vehicle.width > stall_spec.width + 1e-9:
+        reason = "vehicle_too_wide_for_stall"
+    elif vehicle.length > stall_spec.length + 1e-9:
+        reason = "vehicle_too_long_for_stall"
+
+    quarter_arc = math.pi * radius.rear_axle_radius / 2.0 if radius.rear_axle_radius else None
+    reverse_upper_bound = quarter_arc + stall_spec.length if quarter_arc is not None else None
+    if (
+        reason is None
+        and vehicle.max_reverse_distance is not None
+        and reverse_upper_bound is not None
+        and reverse_upper_bound > vehicle.max_reverse_distance + 1e-9
+    ):
+        reason = "maximum_reverse_distance_exceeded_by_conservative_bound"
+    return {
+        **base,
+        "valid": reason is None,
+        "reason": reason,
+        "rule_id": "turning_radius_analytic_v1",
+        "status": "active_conservative",
+        "turning_radius_resolution": radius.to_record(),
+        "footprint_resolution": footprint.to_record(),
+        "quarter_turn_arc_distance": quarter_arc,
+        "reverse_distance_upper_bound": reverse_upper_bound,
+        "centerline_crossing": _centerline_crossing_rule(site),
+        "centerline_check": "requires_swept_path_check",
+        "aisle_end_check": "covered_by_access_proxy_and_turnaround_graph",
+    }
+
+
+def _vehicle_validation_summary(
+    site: SiteSpec,
+    policy: VehicleCheckPolicy,
+    checks: list[dict[str, Any]],
+) -> dict[str, Any]:
+    invalid = [item for item in checks if not item.get("valid", False)]
+    global_reason = policy.configuration_error
+    if policy.requested and site.vehicle is None:
+        global_reason = "design_vehicle_missing"
+    elif policy.requested and not checks and global_reason is None:
+        global_reason = "no_vehicle_checks_executed"
+    valid = not invalid and global_reason is None
+    vehicle = site.vehicle
+    return {
+        "version": "v0.3-vehicle-maneuver-1",
+        "valid": valid,
+        "status": "not_requested" if not policy.requested else ("active" if valid else "active_failed"),
+        "reason": global_reason,
+        "requested": {
+            "turning_radius": policy.require_turning_radius,
+            "swept_path": policy.require_swept_path,
+            "reverse_distance": policy.require_reverse_distance,
+        },
+        "declared_requests": {
+            "turning_radius": policy.declared_turning_radius,
+            "swept_path": policy.declared_swept_path,
+            "reverse_distance": policy.require_reverse_distance,
+        },
+        "design_vehicle": _vehicle_spec_record(vehicle),
+        "maximum_reverse_distance": policy.maximum_reverse_distance,
+        "checked_stalls": len(checks),
+        "invalid_stall_count": len(invalid),
+        "invalid_stall_ids": [str(item.get("stall_id")) for item in invalid],
+        "checks": checks,
+    }
+
+
+def _vehicle_spec_record(vehicle: VehicleSpec | None) -> dict[str, Any] | None:
+    if vehicle is None:
+        return None
+    return {
+        "id": vehicle.id,
+        "length": vehicle.length,
+        "width": vehicle.width,
+        "wheelbase": vehicle.wheelbase,
+        "min_turning_radius": vehicle.min_turning_radius,
+        "turning_radius_reference": vehicle.turning_radius_reference,
+        "track_width": vehicle.track_width,
+        "front_overhang": vehicle.front_overhang,
+        "rear_overhang": vehicle.rear_overhang,
+        "swept_path_margin": vehicle.swept_path_margin,
+        "max_reverse_distance": vehicle.max_reverse_distance,
+    }
+
+
+def _centerline_crossing_rule(site: SiteSpec) -> str:
+    aisle_class = fixed_aisle_class(site)
+    if aisle_class is None or aisle_class.centerline_crossing == "not_applicable":
+        return "allowed"
+    return aisle_class.centerline_crossing
+
+
+def _boolean_setting(raw: object) -> bool:
+    if isinstance(raw, str):
+        return raw.strip().lower() not in {"", "false", "0", "no", "off"}
+    return bool(raw)
+
+
+def _positive_setting(raw: object, default: float) -> float:
+    try:
+        value = float(raw) if raw is not None else default
+    except (TypeError, ValueError):
+        return default
+    return value if math.isfinite(value) and value > 0.0 else default
 
 
 def _renumber_stalls(stalls: list[ParkingStall]) -> list[ParkingStall]:

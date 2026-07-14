@@ -15,6 +15,8 @@ def write_dxf(layout: LayoutResult, path: str | Path) -> None:
 
     doc = ezdxf.new("R2010", setup=True)
     doc.units = ezdxf.units.M
+    if "OPENPARKCAD" not in doc.appids:
+        doc.appids.add("OPENPARKCAD")
     _ensure_layers(doc)
 
     msp = doc.modelspace()
@@ -35,7 +37,15 @@ def write_dxf(layout: LayoutResult, path: str | Path) -> None:
     for aisle in layout.aisles:
         _add_polyline(msp, aisle.polygon, "AISLES")
     for stall in layout.stalls:
-        _add_polyline(msp, stall.polygon, "STALLS")
+        entity = _add_polyline(msp, stall.polygon, "STALLS")
+        entity.set_xdata(
+            "OPENPARKCAD",
+            [
+                (1000, "parking_stall"),
+                (1000, stall.id),
+                (1000, stall.stall_type_id or layout.site.stall.id),
+            ],
+        )
         _add_text(msp, _centroid(stall.polygon), stall.id, "LABELS", height=0.45)
 
     doc.saveas(target)
@@ -58,8 +68,8 @@ def _ensure_layers(doc) -> None:
             doc.layers.add(name, color=color)
 
 
-def _add_polyline(msp, poly: Polygon, layer: str) -> None:
-    msp.add_lwpolyline(poly, close=True, dxfattribs={"layer": layer})
+def _add_polyline(msp, poly: Polygon, layer: str):
+    return msp.add_lwpolyline(poly, close=True, dxfattribs={"layer": layer})
 
 
 def _add_open_polyline(msp, points: list[Point], layer: str) -> None:

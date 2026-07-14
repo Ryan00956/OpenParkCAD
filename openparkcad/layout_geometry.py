@@ -5,19 +5,13 @@ from shapely.geometry import GeometryCollection, MultiPolygon, Polygon as Shapel
 from shapely.ops import unary_union
 
 from openparkcad.models import EntranceSpec, Polygon, SiteSpec
+from openparkcad.site_constraints import ConstraintPurpose, site_usable_area
 
 
-def available_area(site: SiteSpec) -> ShapelyPolygon:
-    boundary = ShapelyPolygon(site.boundary)
-    if not boundary.is_valid:
-        boundary = boundary.buffer(0)
+def available_area(site: SiteSpec, purpose: ConstraintPurpose = "all"):
+    """Return site geometry after the active hard exclusions for ``purpose``."""
 
-    usable = boundary.buffer(-site.margin, join_style="mitre")
-
-    obstacles = [ShapelyPolygon(item) for item in site.obstacles]
-    if not obstacles:
-        return usable
-    return usable.difference(unary_union(obstacles))
+    return site_usable_area(site, purpose)
 
 
 def main_aisle_with_turnaround(site: SiteSpec, entrance: EntranceSpec, heading_degrees: float, start: float, length: float):

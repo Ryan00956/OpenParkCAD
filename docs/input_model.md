@@ -1,8 +1,12 @@
-# OpenParkCAD Input Model Discussion
+# OpenParkCAD Input Model Reference and Discussion
 
 This document discusses the JSON input model. It is not final API law yet. The
 main goal is to separate site facts, design constraints, and optimization choices
 so the algorithm can evolve without changing the whole file format every time.
+The machine-readable accepted shape is
+[`schema/openparkcad-input.schema.json`](../schema/openparkcad-input.schema.json).
+Schema acceptance does not mean every field is active; runtime diagnostics and
+the support matrix below define enforcement.
 
 ## 1. Design Principle
 
@@ -222,11 +226,17 @@ The site should support multiple area classes:
 }
 ```
 
-Initial behavior:
+Current v0.3 behavior:
 
-- obstacles are hard no-go areas,
-- reserved areas are also no-go unless their type is explicitly allowed later,
-- clearance expands the no-go area.
+- polygon obstacles are hard no-go areas by default and use the larger of their
+  declared clearance and `constraints.setbacks.obstacle`;
+- reserved areas use `parking_allowed`, `vehicle_allowed`, and `affects` to
+  select stall, aisle, and swept-path exclusion scopes;
+- hard clearances expand the exclusion geometry;
+- `authority: advisory` or an advisory/soft/draw-only/future `priority` makes a
+  declaration non-blocking; and
+- malformed, out-of-bound, or unsupported hard definitions fail closed instead
+  of disappearing from the report.
 
 ### 5.1 Site Features
 
@@ -378,12 +388,15 @@ Proposed shape:
 }
 ```
 
-Suggested first behavior:
+Current v0.3 behavior:
 
-- pedestrian and fire lane geometries are reserved no-parking areas,
-- they may be drawn in diagnostics,
-- full pedestrian conflict scoring and fire apparatus swept paths are future
-  work.
+- hard pedestrian, accessible, fire, and access-route geometries become scoped
+  stall/aisle/swept-path exclusions;
+- advisory/future routes remain visible but non-blocking;
+- `emergency_access_required` requires hard fire/access geometry, and a positive
+  accessible quota requires hard accessible-route geometry; and
+- route continuity, slope/width compliance, pedestrian conflict scoring, and
+  fire-apparatus swept paths remain future work.
 
 This module is important because fire access, accessible routes, and pedestrian
 safety often override stall-count optimization.
@@ -482,9 +495,15 @@ Important distinction:
 - `access_sides` says which sides may be used to enter or leave the stall.
 - `blocked_sides` says which sides cannot be used because of walls, charging
   posts, curbs, columns, or other fixed objects.
-- `fixed_features` describes stall-local objects that affect access and
-  clearance.
-- quotas impose minimum or maximum requirements.
+- `fixed_features` retains stall-local equipment metadata; charging-type
+  features contribute to EV classification, but are not yet placed as physical
+  collision geometry inside each generated stall.
+- `classifications` is the canonical v0.3 list used to identify explicit
+  `accessible` and `ev` stall types for quota accounting; `qualifications` and
+  `tags` are accepted as compatibility aliases.
+- v0.3 enforces non-negative integer `accessible_min` and `ev_min` counts on the
+  final layout. An unknown positive quota key fails closed; no statutory default
+  is inferred.
 
 ### 8.1 Stall Access and Pass-Through Behavior
 
@@ -561,6 +580,10 @@ cannot realistically reach and use it.
       "width": 1.9,
       "wheelbase": 2.8,
       "min_turning_radius": 5.5,
+      "turning_radius_reference": "outer_front_wheel",
+      "track_width": 1.6,
+      "front_overhang": 1.0,
+      "rear_overhang": 1.0,
       "swept_path_margin": 0.3,
       "max_reverse_distance": 12.0
     }
@@ -568,8 +591,25 @@ cannot realistically reach and use it.
 }
 ```
 
-Phase 0 only needs to represent this. Later phases will use it for maneuver
-validation.
+`turning_radius_reference` is required to interpret the declared radius:
+
+- `rear_axle_center` uses `min_turning_radius` directly; and
+- `outer_front_wheel` converts it with wheelbase and track width using
+  `R_rear = sqrt(R_outer^2 - wheelbase^2) - track_width/2`.
+
+Hard checks require auditable inputs; missing track width cannot silently fall
+back to an assumed value. Explicit front/rear overhangs must sum with wheelbase
+to the vehicle length. If omitted, the non-wheelbase length is split evenly and
+that assumption is reported.
+
+With `require_swept_path_check: false`, requested turning/reverse checks use the
+`active_conservative` analytic mode: radius conversion, vehicle/stall fit, and a
+quarter-turn-plus-stall reverse upper bound. With it set to `true`,
+`active_exact` supports perpendicular-90 reverse-in stalls only. It integrates a
+constant-curvature bicycle arc and straight segment exactly, but collision uses
+a conservative envelope between sampled body poses. Unsupported templates,
+missing parameters, boundary/centerline/hard-exclusion conflicts, and excessive
+reverse distance fail closed.
 
 ## 10. Aisle Information
 
@@ -629,7 +669,8 @@ directionality
   one_way or two_way.
 
 centerline_crossing
-  allowed, forbidden, restricted, or not_applicable.
+  allowed, forbidden, or not_applicable. `not_applicable` is treated as allowed
+  by the current two-way maneuver template.
 
 enabled
   Whether the solver may use this aisle class.
@@ -756,8 +797,12 @@ Constraints should include hard rules that invalidate a layout.
 }
 ```
 
-Phase 0 can read or document these, but it should be honest about which ones are
-active.
+These requests are active in v0.3 for supported perpendicular-90 stalls. A swept
+path or reverse-distance request also activates turning radius as a prerequisite
+for constructing/bounding the path; `declared_requests` preserves what the
+caller explicitly set. The stricter of the vehicle and constraint
+reverse-distance limits is used. If a hard request cannot run, the layout is
+invalid; legacy rectangular/L-shaped proxies are not a fallback pass.
 
 ## 12. Optimization Preferences
 
@@ -864,7 +909,13 @@ use. Reports must be honest about which rules are active.
       "id": "passenger-car",
       "length": 4.8,
       "width": 1.9,
+      "wheelbase": 2.8,
       "min_turning_radius": 5.5,
+      "turning_radius_reference": "outer_front_wheel",
+      "track_width": 1.6,
+      "front_overhang": 1.0,
+      "rear_overhang": 1.0,
+      "swept_path_margin": 0.3,
       "max_reverse_distance": 12.0
     }
   },
@@ -926,16 +977,18 @@ incremental. This matrix records the current implementation boundary; see
 Field or module                         Current implementation status
 ------------------------------------------------------
 version / name / units                  active
-standards                               metadata only
+standards                               metadata; required source/profile/effective date for jurisdictional declarations
 site.boundary polygon                   active
 site.boundary curve_loop / arc          documented, future
-site.obstacles polygon                  active
-site.reserved_areas                     documented, future
-site_features                           partially active for passing bay markers, otherwise drawn only
+site.obstacles polygon                  active hard exclusion with effective clearance
+site.reserved_areas                     active for supported geometry and declared stall/aisle/swept scopes
+site_features                           active for declared hard scopes; advisory shapes remain non-blocking; passing bays feed Phase 5Q
 entrances center / width / heading      active for straight main aisle
-pedestrian routes                       drawn, not enforced
-fire lanes                              drawn, not enforced
+pedestrian / accessible routes          active geometric exclusions when hard; no continuity/usability proof
+fire / emergency access routes          active geometric exclusions when hard; no fire-apparatus model
 parking.stall_types standard-90         active
+parking stall classifications           active for accessible/EV quota identity
+parking accessible_min / ev_min quotas  active hard minimums on final layout
 parking angled maneuver rule            active proxy for generated main/branch stalls
 parking angled main-aisle generation    active, main aisle only
 parking angled branch generation        active
@@ -945,7 +998,12 @@ parking maneuver rule dispatch          active for active/future rule reporting
 parking enabled stall type candidates   active for enumerative comparison
 stall drive_over                        documented, future maneuver rule
 stall access_sides / blocked_sides      documented, future maneuver rule
-vehicles design_vehicle                 parsed first, used later
+vehicles design_vehicle                 active when requested; otherwise parsed/available
+vehicle outer-front-wheel radius        active audited conversion; explicit track width required for hard check
+vehicle rear-axle-center radius          active direct reference
+vehicle conservative analytic check     active optional turning/fit/reverse upper-bound mode
+vehicle perpendicular-90 swept template active optional exact-path/conservative-envelope mode
+vehicle angled/parallel/T-end exact path documented, future and fail-closed if requested
 aisles fixed wide two-way               active first
 aisles narrow one-way                   future graph phase
 aisles narrow two-way                   disabled until deadlock checks exist
@@ -957,7 +1015,11 @@ constraints full graph circulation      active for generated Phase 2A graph
 constraints maneuvering access envelope active as Phase 3A proxy
 constraints turning sweep proxy         active as Phase 3B proxy
 constraints maneuver rule support       active for Phase 3C-1 dispatch
-constraints exact turning radius        documented, future
+constraints exact turning radius        active for supported vehicle mode
+constraints swept path                  active for perpendicular-90 reverse-in template only
+constraints reverse distance            active exact measurement or conservative upper bound
+constraints scoped hard exclusions      active for stall, aisle, and swept-path purposes
+constraints authority / priority        active and report-visible; no built-in jurisdictional rules
 optimization heading_deltas_degrees     active for main aisle heading trials
 optimization entrance_offsets           active for entrance-width offset trials
 optimization branch_start_positions     active for perpendicular branch trials
@@ -1015,6 +1077,9 @@ report selected_connectors              active, includes removed and added stall
 report traffic_graph validation          active in JSON report
 report maneuver_validation              active in JSON report
 report maneuver_validation rule_counts  active in JSON report
+report vehicle_validation               active/not_requested/active_failed with per-stall mode and provenance
+report site_constraint_validation       active with definitions, authority, conflicts, and quotas
+report engineering_validation           active combined versioned decision with active/advisory/unsupported/failed rules
 report operational_quality              active as Phase 5Q local, route, summary, directionality, narrow two-way, passing bay geometry/spacing/entrance-junction/mid-aisle junction meeting, and junction-merge risk report
 report selected_stall_type_id           active in JSON report
 report stall_type_attempts              active in JSON report
@@ -1040,6 +1105,20 @@ diagnostics                             active as reporting structure
 Recommended rule: if a field is accepted but not enforced, the report must say
 so. Silent partial support is dangerous for a design tool.
 
+For v0.3, support status also carries rule authority. `advisory` rules may warn
+or score; active `project_policy` rules fail the solve when violated; a
+`jurisdictional` rule must identify its external profile/source metadata but does
+not make OpenParkCAD a compliance certifier. The top-level input `version` does
+not activate a rule by itself. See the
+[v0.3 vehicle and enforced-constraint contract](v0.3_vehicle_and_constraints.md)
+for fail-closed vehicle, exclusion, quota, and report semantics.
+
+Geometry declarations use a separate `priority`: `hard` participates in active
+exclusion checks; `advisory`/`soft` is diagnostic, and `draw_only`/`future` is
+not enforceable. `authority` answers where a rule came from, while `priority`
+answers whether the current solve enforces it. These fields must not be
+collapsed into one another.
+
 ## 16. Open Questions
 
 These are retained as historical and remaining design questions. Current
@@ -1052,9 +1131,9 @@ runtime diagnostics, and regression tests.
 2. Should the first implementation reject curve geometry, or tessellate arcs
    immediately?
 
-3. Should `wide-two-way-cross` be considered a different aisle class from
-   `wide-two-way-no-cross`, or should crossing be a rule attached to the maneuver
-   model?
+3. Should centerline policy expand beyond the current aisle-class
+   `allowed`/`forbidden`/`not_applicable` values to support time- or
+   maneuver-specific rules?
 
 4. Should the first valid layout require a loop, or is a short dead-end aisle
    acceptable if reverse distance is below a limit?
@@ -1067,20 +1146,21 @@ runtime diagnostics, and regression tests.
 7. Should `drive_over` become a richer enum such as `never`, `empty_only`,
    `maneuver_only`, and `always`, instead of a boolean?
 
-8. Should fire lanes and pedestrian routes be hard no-parking areas in Phase 1,
-   or should they stay documented-only until the graph model exists?
+8. How should geometric pedestrian/fire exclusions grow into route continuity,
+   destination, width/slope, and emergency-apparatus checks without implying a
+   built-in legal profile?
 
 ## 17. Current Next Step
 
-The original Phase 0 parser subset is implemented. The next input-model work is
-to version the accepted shape with a machine-readable JSON Schema and turn
-already accepted design intent into enforceable constraints, in this order:
+The v0.3 parser, machine-readable Schema, vehicle fields, scoped exclusions, and
+minimum quotas are implemented. The next input-model work should deepen coverage
+without making the accepted vocabulary look more capable than runtime checks:
 
 ```text
-obstacle and site-feature clearances
-reserved, pedestrian, and fire-access areas
-vehicle turning radius / swept path / reverse distance
-accessible and EV quotas
+permissioned survey/coordinate-system input and provenance
+general or additional audited vehicle maneuver templates
+pedestrian, accessible, and emergency route connectivity/usability
+stall-local equipment geometry and access-side behavior
 versioned standards profiles with traceable sources
 ```
 

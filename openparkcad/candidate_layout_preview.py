@@ -1,15 +1,18 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any
 
 from shapely.geometry import Polygon as ShapelyPolygon
 
 from openparkcad.candidate_network_preview import candidate_network_preview_report
+from openparkcad.engineering_validation import build_engineering_validation
 from openparkcad.layout_geometry import available_area
 from openparkcad.maneuver_validation import apply_maneuver_filter, validate_maneuvers
 from openparkcad.models import LayoutResult, ParkingAisle, ParkingStall
 from openparkcad.operational_quality import operational_quality_report
 from openparkcad.scoring import score_metrics
+from openparkcad.site_constraints import validate_site_constraints
 from openparkcad.traffic_graph import traffic_graph_summary
 
 
@@ -208,6 +211,14 @@ def _validate_layout_preview(
     maneuver = validate_maneuvers(preview_layout)
     graph = traffic_graph_summary(preview_layout)
     operational = operational_quality_report(preview_layout)
+    site_constraints = validate_site_constraints(preview_layout)
+    validated_preview = replace(
+        preview_layout,
+        maneuver_validation=maneuver,
+        site_constraint_validation=site_constraints,
+        operational_quality=operational,
+    )
+    engineering = build_engineering_validation(validated_preview, result_scope="candidate_preview")
     association = _stall_association_validation(aisles, stalls)
     errors: list[str] = []
     if not containment["valid"]:
@@ -218,6 +229,8 @@ def _validate_layout_preview(
         errors.append("preview_layout_traffic_graph_invalid")
     if not operational["valid"]:
         errors.append("preview_layout_operational_quality_invalid")
+    if not site_constraints["valid"]:
+        errors.append("preview_layout_site_constraints_invalid")
     if not association["valid"]:
         errors.append("preview_layout_stall_association_invalid")
     return {
@@ -228,6 +241,8 @@ def _validate_layout_preview(
         "geometry_containment": containment,
         "stall_association": association,
         "maneuver_validation": maneuver,
+        "site_constraint_validation": site_constraints,
+        "engineering_validation": engineering,
         "operational_quality": operational,
         "traffic_graph": graph,
     }

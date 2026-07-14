@@ -116,7 +116,18 @@ def write_svg(layout: LayoutResult, path: str | Path) -> None:
             )
         parts.append("</g>")
     for stall in layout.stalls:
-        parts.append(_polygon_svg([tx(point) for point in stall.polygon], "#dbeafe", "#1d4ed8", 0.06))
+        parts.append(
+            _polygon_svg(
+                [tx(point) for point in stall.polygon],
+                "#dbeafe",
+                "#1d4ed8",
+                0.06,
+                attributes={
+                    "data-stall-id": _display_stall_label(stall.id),
+                    "data-stall-type-id": stall.stall_type_id or layout.site.stall.id,
+                },
+            )
+        )
         cx, cy = _centroid([tx(point) for point in stall.polygon])
         parts.append(
             f'<text x="{cx:.3f}" y="{cy:.3f}" font-size="0.82" text-anchor="middle" '
@@ -127,12 +138,24 @@ def write_svg(layout: LayoutResult, path: str | Path) -> None:
     target.write_text("\n".join(parts), encoding="utf-8")
 
 
-def _polygon_svg(poly: Polygon, fill: str, stroke: str, stroke_width: float, opacity: float = 1.0, dasharray: str | None = None) -> str:
+def _polygon_svg(
+    poly: Polygon,
+    fill: str,
+    stroke: str,
+    stroke_width: float,
+    opacity: float = 1.0,
+    dasharray: str | None = None,
+    attributes: dict[str, object] | None = None,
+) -> str:
     points = " ".join(f"{x:.3f},{y:.3f}" for x, y in poly)
     dash = f' stroke-dasharray="{_xml_attr(dasharray)}"' if dasharray else ""
+    extra = "".join(
+        f' {name}="{_xml_attr(value)}"'
+        for name, value in sorted((attributes or {}).items())
+    )
     return (
         f'<polygon points="{_xml_attr(points)}" fill="{_xml_attr(fill)}" '
-        f'stroke="{_xml_attr(stroke)}" stroke-width="{stroke_width}" opacity="{opacity:.2f}"{dash}/>'
+        f'stroke="{_xml_attr(stroke)}" stroke-width="{stroke_width}" opacity="{opacity:.2f}"{dash}{extra}/>'
     )
 
 

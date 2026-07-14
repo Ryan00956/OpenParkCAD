@@ -4,12 +4,14 @@ from dataclasses import replace
 from itertools import product
 
 from openparkcad.candidate_snapshot import attach_candidate_snapshot
+from openparkcad.engineering_validation import build_engineering_validation
 from openparkcad.maneuver_validation import apply_maneuver_filter
 from openparkcad.models import AngleAttempt, LayoutResult, SiteSpec, StallSpec
 from openparkcad.operational_quality import operational_quality_report
 from openparkcad.phase1_candidates import iter_phase1_candidates
 from openparkcad.phase1_support import phase1_unsupported_inputs
 from openparkcad.scoring import score_layout, score_total
+from openparkcad.site_constraints import validate_site_constraints
 from openparkcad.traffic_graph import build_traffic_graph, validate_traffic_graph
 
 
@@ -29,7 +31,7 @@ def generate_layout(site: SiteSpec) -> LayoutResult:
         )
         object.__setattr__(layout, "stall_type_attempts", [_stall_type_attempt(layout, selected=selected)])
         object.__setattr__(layout, "stall_assignment_attempts", [_stall_assignment_attempt(layout, selected=selected)])
-        return attach_candidate_snapshot(layout)
+        return attach_candidate_snapshot(_with_engineering_validation(layout))
 
     layouts = [
         _generate_layout_for_site(_site_with_stall_assignment(site, main_stall, branch_stall))
@@ -87,7 +89,7 @@ def generate_layout(site: SiteSpec) -> LayoutResult:
         ],
     )
     object.__setattr__(best, "unsupported_phase1_inputs", phase1_unsupported_inputs(selected_site))
-    return attach_candidate_snapshot(best)
+    return attach_candidate_snapshot(_with_engineering_validation(best))
 
 
 def _generate_layout_for_site(site: SiteSpec) -> LayoutResult:
@@ -100,6 +102,7 @@ def _generate_layout_for_site(site: SiteSpec) -> LayoutResult:
     attempts: list[AngleAttempt] = []
     best: LayoutResult | None = None
     best_structural_rejection: LayoutResult | None = None
+    best_vehicle_rejection: LayoutResult | None = None
     best_operational_rejection: LayoutResult | None = None
     unsupported = phase1_unsupported_inputs(site)
 
@@ -123,6 +126,7 @@ def _generate_layout_for_site(site: SiteSpec) -> LayoutResult:
         if (
             _graph_valid(layout)
             and _maneuver_valid(layout)
+            and _site_constraints_valid(layout)
             and _operational_valid(layout)
             and not _has_minimum_layout_content(layout)
             and (
@@ -132,8 +136,17 @@ def _generate_layout_for_site(site: SiteSpec) -> LayoutResult:
         ):
             best_structural_rejection = layout
         if (
+            _vehicle_validation_failed(layout)
+            and (
+                best_vehicle_rejection is None
+                or score_total(layout) > score_total(best_vehicle_rejection)
+            )
+        ):
+            best_vehicle_rejection = layout
+        if (
             _graph_valid(layout)
             and _maneuver_valid(layout)
+            and _site_constraints_valid(layout)
             and not _operational_valid(layout)
             and (
                 best_operational_rejection is None
@@ -145,18 +158,24 @@ def _generate_layout_for_site(site: SiteSpec) -> LayoutResult:
             best = layout
 
     if best is None:
-        empty = _with_graph_validation(
-            apply_maneuver_filter(
-                LayoutResult(
-                    site=site,
-                    stalls=[],
-                    generation_mode="phase1_main_aisle",
-                    attempts=attempts,
-                    unsupported_phase1_inputs=unsupported,
+        empty = _with_site_constraint_validation(
+            _with_graph_validation(
+                apply_maneuver_filter(
+                    LayoutResult(
+                        site=site,
+                        stalls=[],
+                        generation_mode="phase1_main_aisle",
+                        attempts=attempts,
+                        unsupported_phase1_inputs=unsupported,
+                    )
                 )
             )
         )
-        if best_structural_rejection is not None:
+        if best_vehicle_rejection is not None:
+            report = dict(best_vehicle_rejection.maneuver_validation)
+            report["result_scope"] = "best_vehicle_rejected_candidate"
+            object.__setattr__(empty, "maneuver_validation", report)
+        elif best_structural_rejection is not None:
             object.__setattr__(empty, "maneuver_validation", dict(best_structural_rejection.maneuver_validation))
         if best_operational_rejection is None:
             empty = _with_operational_quality(empty)
@@ -165,7 +184,7 @@ def _generate_layout_for_site(site: SiteSpec) -> LayoutResult:
             report["result_scope"] = "best_rejected_candidate"
             report["rejected_candidate_stall_count"] = best_operational_rejection.stall_count
             object.__setattr__(empty, "operational_quality", report)
-        return _with_score(empty)
+        return _with_score(_with_engineering_validation(empty))
 
     result = LayoutResult(
         site=site,
@@ -186,10 +205,11 @@ def _generate_layout_for_site(site: SiteSpec) -> LayoutResult:
         selected_stall_type_id=best.site.stall.id,
         graph_validation=best.graph_validation,
         maneuver_validation=best.maneuver_validation,
+        site_constraint_validation=best.site_constraint_validation,
         operational_quality=best.operational_quality,
         unsupported_phase1_inputs=unsupported,
     )
-    return _with_score(result)
+    return _with_score(_with_engineering_validation(result))
 
 
 def _candidate_stalls(site: SiteSpec) -> tuple[StallSpec, ...]:
@@ -233,6 +253,8 @@ def _stall_type_attempt(layout: LayoutResult, selected: bool) -> dict[str, objec
         "graph_errors": list(layout.graph_validation.get("errors", [])),
         "maneuver_valid": bool(layout.maneuver_validation.get("valid", False)),
         "maneuver_invalid_count": len(layout.maneuver_validation.get("invalid_stalls", [])),
+        "site_constraints_valid": _site_constraints_valid(layout),
+        "site_constraint_error_count": len(layout.site_constraint_validation.get("errors", [])),
         "operational_valid": _operational_valid(layout),
         "operational_blockers": list(layout.operational_quality.get("promotion_blockers", [])),
         "layout_valid": _layout_valid(layout),
@@ -255,6 +277,8 @@ def _stall_assignment_attempt(layout: LayoutResult, selected: bool) -> dict[str,
         "graph_errors": list(layout.graph_validation.get("errors", [])),
         "maneuver_valid": bool(layout.maneuver_validation.get("valid", False)),
         "maneuver_invalid_count": len(layout.maneuver_validation.get("invalid_stalls", [])),
+        "site_constraints_valid": _site_constraints_valid(layout),
+        "site_constraint_error_count": len(layout.site_constraint_validation.get("errors", [])),
         "operational_valid": _operational_valid(layout),
         "operational_blockers": list(layout.operational_quality.get("promotion_blockers", [])),
         "layout_valid": _layout_valid(layout),
@@ -286,8 +310,21 @@ def _with_operational_quality(layout: LayoutResult) -> LayoutResult:
     return layout
 
 
+def _with_site_constraint_validation(layout: LayoutResult) -> LayoutResult:
+    object.__setattr__(layout, "site_constraint_validation", validate_site_constraints(layout))
+    return layout
+
+
+def _with_engineering_validation(layout: LayoutResult) -> LayoutResult:
+    object.__setattr__(layout, "engineering_validation", build_engineering_validation(layout))
+    return layout
+
+
 def _finalize_candidate(layout: LayoutResult) -> LayoutResult:
-    return _with_score(_with_operational_quality(_with_graph_validation(apply_maneuver_filter(layout))))
+    filtered = apply_maneuver_filter(layout)
+    validated = _with_site_constraint_validation(_with_graph_validation(filtered))
+    validated = _with_operational_quality(validated)
+    return _with_score(_with_engineering_validation(validated))
 
 
 def _graph_valid(layout: LayoutResult) -> bool:
@@ -299,6 +336,8 @@ def _layout_valid(layout: LayoutResult) -> bool:
         _has_minimum_layout_content(layout)
         and _graph_valid(layout)
         and _maneuver_valid(layout)
+        and _site_constraints_valid(layout)
+        and _engineering_valid(layout)
         and _operational_valid(layout)
     )
 
@@ -309,6 +348,23 @@ def _has_minimum_layout_content(layout: LayoutResult) -> bool:
 
 def _maneuver_valid(layout: LayoutResult) -> bool:
     return bool(layout.maneuver_validation.get("valid", False))
+
+
+def _vehicle_validation_failed(layout: LayoutResult) -> bool:
+    vehicle_validation = layout.maneuver_validation.get("vehicle_validation")
+    return (
+        isinstance(vehicle_validation, dict)
+        and vehicle_validation.get("valid") is False
+        and vehicle_validation.get("result_scope") == "all_generated_stalls_rejected"
+    )
+
+
+def _site_constraints_valid(layout: LayoutResult) -> bool:
+    return bool(layout.site_constraint_validation.get("valid", False))
+
+
+def _engineering_valid(layout: LayoutResult) -> bool:
+    return bool(layout.engineering_validation.get("valid", False))
 
 
 def _operational_valid(layout: LayoutResult) -> bool:

@@ -4,10 +4,9 @@ The near-term objective is not to add more risk metrics. It is to make the
 existing supported template generator predictable, fail-closed, testable, and
 honest about what a “valid” result means.
 
-## Current closure baseline
+## v0.2 closure baseline
 
-The first reliability pass is implemented in the current post-`0.1.0` working
-tree:
+The first reliability pass was pushed as the v0.2 template-planner baseline:
 
 - final validity is checked before export and hard rejection is fail-closed;
 - declared aisle and entrance graph links require plausible geometric contact;
@@ -20,39 +19,43 @@ tree:
 - documentation plus Python 3.10/3.12 lint, coverage, build, and wheel-smoke CI
   define the engineering baseline.
 
-This closes the immediate correctness issues without claiming a new vehicle or
-regulatory capability.
-
-## v0.2 release: Trustworthy template planner
-
-Before publishing `0.2.0`:
-
-- run the new CI matrix in the hosted environment and keep it green;
-- publish a machine-readable input schema and version the report contract;
-- add several anonymized real-lot fixtures, expected invariants, and DXF review
-  notes instead of relying primarily on synthetic geometry;
-- record runtime/quality baselines for both greedy and promoted layouts;
-- decide package/repository licensing before external distribution; and
-- update the package version, changelog, and release metadata together.
-
-The result should be described as a **template planner**, not an automatic
-compliance or construction-design system.
+That baseline is a **template planner**, not an automatic compliance or
+construction-design system. Package licensing, Schema, version metadata, and
+representative fixtures are completed in the v0.3 development line.
 
 ## v0.3: Vehicle and enforced site constraints
 
-Add engineering validity that the current envelope proxies cannot provide:
+The current v0.3 implementation adds a narrow, fail-closed engineering layer:
 
-- a parameterized low-speed vehicle/bicycle model or audited swept-path template
-  library;
-- minimum-turn-radius, reverse-distance, centerline-crossing, and aisle-end
-  checks using the selected vehicle class;
-- hard enforcement for obstacles, pedestrian/fire reservations, access routes,
-  accessible/EV quotas, and other requirements already represented by the input
-  vocabulary;
-- explicit distinction between advisory, project-policy, and jurisdictional
-  rules; and
-- a real-site regression corpus with human CAD comparisons and documented
-  tolerances.
+- audited outer-front-wheel or rear-axle-center turning-radius input, explicit
+  vehicle footprint geometry, and conservative analytic fit/reverse bounds;
+- an optional perpendicular-90 reverse-in template with exact
+  constant-curvature bicycle poses and conservative sampled swept envelopes;
+- fail-closed turning-radius, reverse-distance, centerline policy, drivable-area,
+  boundary, and hard site-exclusion decisions for that template;
+- hard obstacle/reserved/feature/pedestrian/fire/access-route scopes plus
+  accessible/EV minimum quotas on the final layout;
+- separate advisory/project-policy/jurisdictional authority and execution
+  priority, with source/effective-date metadata required for jurisdictional
+  declarations; and
+- MIT licensing, a packaged JSON Schema, and synthetic representative
+  real-site-shaped regression inputs.
+
+Remaining validation/product work is intentionally not hidden inside the v0.3
+claim:
+
+- permissioned/anonymized survey cases with recorded human CAD comparisons and
+  tolerances;
+- exact templates or general path search for angled, parallel, T-end,
+  multi-point, articulated, and emergency-vehicle maneuvers;
+- route connectivity/usability and accessible/EV equipment design checks; and
+- sourced regional rule implementations, review/sign-off, and supported release
+  operations.
+
+The release claim and fail-closed behavior are defined in the
+[v0.3 vehicle and enforced-constraint contract](v0.3_vehicle_and_constraints.md).
+Representative fixtures are useful regression inputs, but are not field
+validation or real customer sites.
 
 ## v0.4: Global candidate optimization
 

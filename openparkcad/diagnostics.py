@@ -5,6 +5,7 @@ from typing import Any
 
 from openparkcad.models import LayoutResult, SiteSpec
 from openparkcad.phase1_support import phase1_unsupported_inputs
+from openparkcad.site_constraints import declared_constraint_geometries
 from openparkcad.traffic_graph import traffic_graph_summary
 
 
@@ -37,15 +38,44 @@ def build_input_diagnostics(site: SiteSpec, layout: LayoutResult | None = None) 
         warnings.append("entrances are parsed and drawn, but aisle connectivity to entrances is not enforced yet")
     elif phase1_active:
         warnings.append("entrance-to-main-aisle connection is active; Phase 2 graph reachability is now reported")
+    vehicle_mode = _vehicle_validation_mode(site, layout)
+    vehicle_status = _vehicle_field_status(site, layout)
     if site.vehicle:
-        parsed_future_fields.append("vehicles.design_vehicle")
-        warnings.append("vehicle dimensions are parsed; Phase 3 uses conservative access and turning-sweep envelopes, but full turning radius is not enforced yet")
+        active_fields.append("vehicles.design_vehicle")
+        if vehicle_mode == "exact_swept_path":
+            warnings.append(
+                f"vehicle validation {'uses' if layout else 'requests'} the supported perpendicular-90 reverse-in "
+                "bicycle template with exact "
+                "constant-curvature pose integration and a conservative sampled body envelope; this is not a driver, "
+                "tyre, dynamics, or jurisdictional simulation"
+            )
+        elif vehicle_mode == "conservative_analytic":
+            warnings.append(
+                f"vehicle validation {'uses' if layout else 'requests'} rear-axle turning-radius conversion and "
+                "conservative analytic fit/reverse "
+                "bounds; it does not validate a spatial swept path or aisle-centerline crossing"
+            )
+        else:
+            warnings.append(
+                "design-vehicle data is parsed and available, but no vehicle-level check was requested; legacy "
+                "maneuver envelopes remain proxies"
+            )
+        if vehicle_status == "active_failed":
+            warnings.append("a requested vehicle-level check failed and is fail-closed for final layout validity")
+    elif any(_requested_vehicle_checks(site).values()):
+        warnings.append("vehicle-level validation was requested without a design vehicle and will fail closed")
     if site.site_features:
-        parsed_future_fields.append("site_features")
-        warnings.append("site_features are parsed and drawn; passing bay markers feed Phase 5Q narrow two-way geometry, spacing, entrance/junction/mid-aisle-junction meeting-risk, and junction-merge reports, while other clearance or collision checks are still future")
+        warnings.append(
+            f"hard site-feature scopes are {'enforced' if layout else 'available for enforcement'} for stall, aisle, "
+            "and/or swept-path geometry as declared; "
+            "advisory/draw-only features remain non-blocking, and passing-bay markers also feed Phase 5Q proxies"
+        )
     if site.pedestrian_and_emergency:
-        parsed_future_fields.append("pedestrian_and_emergency")
-        warnings.append("pedestrian and emergency reservations are parsed but not enforced yet")
+        warnings.append(
+            f"hard pedestrian, accessible, fire, and emergency route scopes are "
+            f"{'enforced' if layout else 'available for enforcement'} as declared; advisory or "
+            "future-priority routes are drawn/reported without becoming hard exclusions"
+        )
     if site.stall.drive_over or site.stall.blocked_sides or site.stall.access_sides != ("front",):
         parsed_future_fields.append("parking.stall access behavior")
         warnings.append("stall access_sides, blocked_sides, and drive_over are parsed but not enforced yet")
@@ -54,7 +84,10 @@ def build_input_diagnostics(site: SiteSpec, layout: LayoutResult | None = None) 
     if site.aisle_selection_mode != "fixed":
         warnings.append("aisle selection modes beyond fixed are documented but not optimized yet")
     if site.constraints.get("maneuvering"):
-        warnings.append("maneuvering constraints are partially active through the Phase 3A stall access envelope")
+        warnings.append(
+            "maneuver requests are fail-closed for the supported perpendicular-90 template; unsupported stall "
+            "families or missing required vehicle geometry cannot pass through a proxy fallback"
+        )
     if site.optimization:
         parsed_future_fields.append("optimization")
         warnings.append("optimization weights are active for Phase 1 scoring; candidate generation is still deliberately narrow")
@@ -151,6 +184,9 @@ def build_input_diagnostics(site: SiteSpec, layout: LayoutResult | None = None) 
         },
         "candidate_layout_promotion": layout.candidate_layout_promotion if layout else {},
         "maneuver_validation": layout.maneuver_validation if layout else None,
+        "vehicle_validation": _vehicle_validation_diagnostic(site, layout),
+        "site_constraint_validation": layout.site_constraint_validation if layout else None,
+        "engineering_validation": layout.engineering_validation if layout else None,
         "operational_quality": layout.operational_quality if layout else None,
         "active_stall_type": asdict(site.stall),
         "unsupported_phase1_inputs": unsupported,
@@ -187,8 +223,18 @@ def _constraint_status(site: SiteSpec, layout: LayoutResult | None) -> list[dict
         },
         {
             "constraint": "obstacle avoidance",
-            "status": "active",
-            "note": "Polygon obstacles are removed from the usable area.",
+            "status": _constraint_source_status(site, layout, {"obstacle"}),
+            "note": (
+                "Hard polygon obstacles use the larger of their declared clearance and the project obstacle setback."
+            ),
+        },
+        {
+            "constraint": "declared site exclusions",
+            "status": _site_constraint_status(layout),
+            "note": (
+                "Hard obstacle, reserved-area, feature, and route scopes are checked against the exact official "
+                "stall/aisle layout; advisory authority or priority remains non-blocking."
+            ),
         },
         entrance_status,
         turnaround_status,
@@ -265,9 +311,38 @@ def _constraint_status(site: SiteSpec, layout: LayoutResult | None) -> list[dict
             ),
         },
         {
+            "constraint": "v0.3 engineering validation contract",
+            "status": _engineering_validation_status(layout),
+            "note": (
+                "Combines vehicle, hard site, quota, authority, advisory, unsupported, and failed-rule evidence for "
+                "the exact official layout into one versioned fail-closed decision."
+            ),
+        },
+        {
             "constraint": "vehicle turning radius",
-            "status": "future",
-            "note": "Vehicle data is parsed but swept path and turning-radius checks are not implemented yet.",
+            "status": _vehicle_check_status(site, layout, "turning_radius"),
+            "note": (
+                "When requested, the declared radius is resolved to the rear-axle-center path. "
+                "outer_front_wheel inputs require explicit wheelbase and track width and fail closed if conversion "
+                "cannot be audited."
+            ),
+        },
+        {
+            "constraint": "vehicle swept path",
+            "status": _vehicle_check_status(site, layout, "swept_path"),
+            "note": (
+                "Optional exact mode supports perpendicular-90 reverse-in only: exact constant-curvature bicycle "
+                "poses are wrapped by a conservative sampled body envelope and checked against drivable, boundary, "
+                "centerline, and hard-exclusion geometry."
+            ),
+        },
+        {
+            "constraint": "vehicle reverse distance",
+            "status": _vehicle_check_status(site, layout, "reverse_distance"),
+            "note": (
+                "Exact mode measures its template path; conservative mode uses a fail-closed quarter-turn-plus-stall "
+                "upper bound."
+            ),
         },
         {
             "constraint": "narrow two-way deadlock",
@@ -276,8 +351,23 @@ def _constraint_status(site: SiteSpec, layout: LayoutResult | None) -> list[dict
         },
         {
             "constraint": "pedestrian and emergency reservations",
-            "status": "future",
-            "note": "Reserved routes are parsed but not enforced as no-parking areas yet.",
+            "status": _constraint_source_status(
+                site,
+                layout,
+                {"pedestrian_route", "accessible_route", "fire_lane", "access_route", "emergency_access_route"},
+            ),
+            "note": (
+                "Hard declared route scopes exclude stalls, aisles, and/or swept paths; advisory/future-priority "
+                "routes stay non-blocking. Required route declarations without usable hard geometry fail closed."
+            ),
+        },
+        {
+            "constraint": "accessible and EV minimum quotas",
+            "status": _quota_status(site, layout),
+            "note": (
+                "Positive minimums count final stalls by explicit stall-type classifications or charging features; "
+                "an unmet or unsupported positive quota invalidates the layout."
+            ),
         },
     ]
 
@@ -290,18 +380,19 @@ def _field_support(site: SiteSpec, layout: LayoutResult | None) -> dict[str, str
         "standards": "parsed_not_enforced",
         "site.boundary.polygon": "active",
         "site.boundary.curve_loop": "future",
-        "site.obstacles.polygon": "active",
-        "site.reserved_areas": "future",
-        "site_features": (
-            "partially_active"
-            if site.site_features and layout
-            else ("drawn_not_enforced" if site.site_features else "future")
-        ),
+        "site.obstacles.polygon": _constraint_source_status(site, layout, {"obstacle"}),
+        "site.reserved_areas": _constraint_source_status(site, layout, {"reserved_area"}),
+        "site_features": _constraint_source_status(site, layout, {"site_feature"}),
         "entrances": "active" if _phase1_main_aisle_active(layout) else ("drawn_not_enforced" if site.entrances else "future"),
-        "pedestrian_and_emergency.pedestrian_routes": _pedestrian_status(site, "pedestrian_routes"),
-        "pedestrian_and_emergency.fire_lanes": _pedestrian_status(site, "fire_lanes"),
-        "vehicles.design_vehicle": "parsed_not_enforced" if site.vehicle else "future",
+        "pedestrian_and_emergency.pedestrian_routes": _pedestrian_status(site, "pedestrian_routes", layout),
+        "pedestrian_and_emergency.accessible_routes": _pedestrian_status(site, "accessible_routes", layout),
+        "pedestrian_and_emergency.fire_lanes": _pedestrian_status(site, "fire_lanes", layout),
+        "pedestrian_and_emergency.access_routes": _pedestrian_status(site, "access_routes", layout),
+        "vehicles.design_vehicle": _vehicle_field_status(site, layout),
         "parking.standard_perpendicular": "active",
+        "parking.stall_type_classifications": _classification_status(site, layout),
+        "parking.quotas.accessible_min": _quota_key_status(site, layout, "accessible_min"),
+        "parking.quotas.ev_min": _quota_key_status(site, layout, "ev_min"),
         "parking.stall_type_candidate_selection": "active" if len(_stall_candidates(site)) > 1 else "available",
         "parking.stall_type_segment_assignment": "active" if layout and layout.stall_assignment_attempts else ("available" if len(_stall_candidates(site)) > 1 else "future"),
         "parking.angled_maneuver_proxy": _angled_maneuver_status(site, layout),
@@ -337,8 +428,10 @@ def _field_support(site: SiteSpec, layout: LayoutResult | None) -> dict[str, str
         "constraints.operational_route_summary": _operational_quality_status(layout),
         "constraints.operational_directionality_risk": _operational_quality_status(layout),
         "constraints.operational_narrow_two_way_risk": _operational_quality_status(layout),
-        "constraints.turning_radius": "future",
-        "constraints.swept_path": "future",
+        "constraints.site_hard_exclusions": _site_constraint_status(layout),
+        "constraints.turning_radius": _vehicle_check_status(site, layout, "turning_radius"),
+        "constraints.swept_path": _vehicle_check_status(site, layout, "swept_path"),
+        "constraints.reverse_distance": _vehicle_check_status(site, layout, "reverse_distance"),
         "optimization.weights": "active" if layout and layout.score else ("available" if site.optimization else "future"),
         "optimization.score_breakdown": "active" if _phase1_main_aisle_active(layout) else "future",
         "optimization.candidate_objects": "active" if layout and layout.candidate_objects else "future",
@@ -378,16 +471,180 @@ def _field_support(site: SiteSpec, layout: LayoutResult | None) -> dict[str, str
         "optimization.candidate_layout_preview_scoring": "active" if _layout_preview_comparison(layout) else "future",
         "optimization.promote_candidate_layout_preview": _candidate_layout_promotion_status(layout),
         "diagnostics.report": "active",
+        "diagnostics.engineering_validation": _engineering_validation_status(layout),
         "diagnostics.svg_candidate_network_preview": "active" if layout and layout.candidate_network_preview else "future",
         "diagnostics.debug_layers": "active",
     }
     return support
 
 
-def _pedestrian_status(site: SiteSpec, key: str) -> str:
-    if site.pedestrian_and_emergency.get(key):
-        return "drawn_not_enforced"
-    return "future"
+def _pedestrian_status(site: SiteSpec, key: str, layout: LayoutResult | None = None) -> str:
+    source_by_key = {
+        "pedestrian_routes": "pedestrian_route",
+        "accessible_routes": "accessible_route",
+        "fire_lanes": "fire_lane",
+        "access_routes": "access_route",
+        "emergency_access_routes": "emergency_access_route",
+    }
+    source = source_by_key.get(key)
+    if source is None:
+        return "future"
+    return _constraint_source_status(site, layout, {source})
+
+
+def _declared_constraints(site: SiteSpec):
+    try:
+        return declared_constraint_geometries(site, include_advisory=True)
+    except ValueError:
+        return None
+
+
+def _constraint_source_status(
+    site: SiteSpec,
+    layout: LayoutResult | None,
+    sources: set[str],
+) -> str:
+    declared = _declared_constraints(site)
+    if declared is None:
+        if layout is not None and layout.site_constraint_validation:
+            return "active_failed"
+        return "declared_invalid"
+    declarations = [item for item in declared if item.source in sources]
+    if not declarations:
+        return "available"
+    if not any(item.hard for item in declarations):
+        return "advisory_only"
+    if layout is None or not layout.site_constraint_validation:
+        return "declared_pending_layout"
+    return "active" if layout.site_constraint_validation.get("valid", False) else "active_failed"
+
+
+def _site_constraint_status(layout: LayoutResult | None) -> str:
+    if layout is None or not layout.site_constraint_validation:
+        return "available"
+    return "active" if layout.site_constraint_validation.get("valid", False) else "active_failed"
+
+
+def _maneuvering_settings(site: SiteSpec) -> dict[str, Any]:
+    raw = site.constraints.get("maneuvering", {})
+    return raw if isinstance(raw, dict) else {}
+
+
+def _boolean_setting(raw: object) -> bool:
+    if isinstance(raw, str):
+        return raw.strip().lower() not in {"", "false", "0", "no", "off"}
+    return bool(raw)
+
+
+def _declared_vehicle_requests(site: SiteSpec) -> dict[str, bool]:
+    maneuvering = _maneuvering_settings(site)
+    swept_path = _boolean_setting(maneuvering.get("require_swept_path_check", False))
+    turning_radius = _boolean_setting(maneuvering.get("require_turning_radius_check", False))
+    reverse_distance = (
+        maneuvering.get("max_reverse_distance") is not None
+        or bool(site.vehicle and site.vehicle.max_reverse_distance is not None)
+    )
+    return {
+        "turning_radius": turning_radius,
+        "swept_path": swept_path,
+        "reverse_distance": reverse_distance,
+    }
+
+
+def _requested_vehicle_checks(site: SiteSpec) -> dict[str, bool]:
+    declared = _declared_vehicle_requests(site)
+    return {
+        "turning_radius": (
+            declared["turning_radius"] or declared["swept_path"] or declared["reverse_distance"]
+        ),
+        "swept_path": declared["swept_path"],
+        "reverse_distance": declared["reverse_distance"],
+    }
+
+
+def _vehicle_validation_report(layout: LayoutResult | None) -> dict[str, Any]:
+    if layout is None or not isinstance(layout.maneuver_validation, dict):
+        return {}
+    report = layout.maneuver_validation.get("vehicle_validation", {})
+    return report if isinstance(report, dict) else {}
+
+
+def _vehicle_validation_mode(site: SiteSpec, layout: LayoutResult | None) -> str:
+    requested = _requested_vehicle_checks(site)
+    if requested["swept_path"]:
+        return "exact_swept_path"
+    if requested["turning_radius"] or requested["reverse_distance"]:
+        return "conservative_analytic"
+    return "not_requested"
+
+
+def _vehicle_field_status(site: SiteSpec, layout: LayoutResult | None) -> str:
+    requested = _requested_vehicle_checks(site)
+    any_requested = any(requested.values())
+    if site.vehicle is None:
+        return "requested_missing" if any_requested else "available"
+    if not any_requested:
+        return "parsed_available"
+    if layout is None:
+        return "requested_pending_layout"
+    report = _vehicle_validation_report(layout)
+    if not report or not report.get("valid", False):
+        return "active_failed"
+    return "active_exact" if requested["swept_path"] else "active_conservative"
+
+
+def _vehicle_check_status(site: SiteSpec, layout: LayoutResult | None, check: str) -> str:
+    requested = _requested_vehicle_checks(site)
+    if not requested.get(check, False):
+        return "available"
+    if layout is None:
+        return "requested_pending_layout"
+    report = _vehicle_validation_report(layout)
+    if not report or not report.get("valid", False):
+        return "active_failed"
+    return "active_exact" if requested["swept_path"] else "active_conservative"
+
+
+def _vehicle_validation_diagnostic(site: SiteSpec, layout: LayoutResult | None) -> dict[str, Any]:
+    report = _vehicle_validation_report(layout)
+    requested = _requested_vehicle_checks(site)
+    return {
+        "mode": _vehicle_validation_mode(site, layout),
+        "status": _vehicle_field_status(site, layout),
+        "requested": requested,
+        "declared_requests": _declared_vehicle_requests(site),
+        "fail_closed_when_requested": True,
+        "checked_stalls": int(report.get("checked_stalls", 0)),
+        "invalid_stall_count": int(report.get("invalid_stall_count", 0)),
+        "report_version": report.get("version"),
+        "scope": (
+            "perpendicular-90 reverse-in template with exact constant-curvature pose integration and a "
+            "conservative sampled body envelope"
+            if requested["swept_path"]
+            else "rear-axle radius conversion, vehicle/stall fit, and conservative reverse-distance bound"
+        ),
+    }
+
+
+def _quota_status(site: SiteSpec, layout: LayoutResult | None) -> str:
+    if not any(value > 0 for value in site.parking_quotas.values()):
+        return "available"
+    if layout is None or not layout.site_constraint_validation:
+        return "declared_pending_layout"
+    quota = layout.site_constraint_validation.get("quota", {})
+    return "active" if isinstance(quota, dict) and quota.get("valid", False) else "active_failed"
+
+
+def _quota_key_status(site: SiteSpec, layout: LayoutResult | None, key: str) -> str:
+    if site.parking_quotas.get(key, 0) <= 0:
+        return "available"
+    return _quota_status(site, layout)
+
+
+def _classification_status(site: SiteSpec, layout: LayoutResult | None) -> str:
+    if not any(stall.classifications or stall.fixed_features for stall in _stall_candidates(site)):
+        return "available"
+    return "active" if layout else "declared_pending_layout"
 
 
 def _stall_candidates(site: SiteSpec):
@@ -567,6 +824,12 @@ def _operational_quality_status(layout: LayoutResult | None) -> str:
     if not layout or not layout.operational_quality:
         return "future"
     return "active" if layout.operational_quality.get("valid", True) else "active_failed"
+
+
+def _engineering_validation_status(layout: LayoutResult | None) -> str:
+    if not layout or not layout.engineering_validation:
+        return "future"
+    return "active" if layout.engineering_validation.get("valid", False) else "active_failed"
 
 
 def _angled_maneuver_status(site: SiteSpec, layout: LayoutResult | None) -> str:

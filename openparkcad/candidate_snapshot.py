@@ -7,11 +7,13 @@ from shapely.geometry import Polygon as ShapelyPolygon
 from openparkcad.candidate_layout_preview import build_candidate_layout_preview, candidate_layout_preview_layout
 from openparkcad.candidate_network_preview import build_candidate_network_preview
 from openparkcad.candidate_selector import select_candidate_objects
+from openparkcad.engineering_validation import build_engineering_validation
 from openparkcad.layout_geometry import available_area, normalized_local_box_to_world, polygon_points
 from openparkcad.maneuver_validation import validate_maneuvers
 from openparkcad.models import CandidateObject, LayoutResult, ParkingAisle, ParkingStall, Polygon
 from openparkcad.operational_quality import operational_quality_report
 from openparkcad.scoring import score_layout
+from openparkcad.site_constraints import validate_site_constraints
 from openparkcad.traffic_graph import build_traffic_graph, validate_traffic_graph
 
 
@@ -61,7 +63,7 @@ def _maybe_promote_candidate_layout(layout: LayoutResult) -> LayoutResult:
     promoted = replace(
         layout,
         aisles=preview_layout.aisles,
-        stalls=preview_layout.stalls,
+        stalls=_official_stalls(preview_layout.stalls),
         generation_mode="candidate_layout_promoted",
     )
     promoted = _with_recomputed_validation(promoted)
@@ -93,14 +95,21 @@ def _with_recomputed_validation(layout: LayoutResult) -> LayoutResult:
                 if key in preview_maneuver:
                     maneuver[key] = preview_maneuver[key]
     graph = validate_traffic_graph(build_traffic_graph(layout), layout)
+    site_constraints = validate_site_constraints(layout)
     operational = operational_quality_report(layout)
     validated = replace(
         layout,
         maneuver_validation=maneuver,
         graph_validation=graph,
+        site_constraint_validation=site_constraints,
         operational_quality=operational,
     )
+    validated = replace(validated, engineering_validation=build_engineering_validation(validated))
     return replace(validated, score=score_layout(validated))
+
+
+def _official_stalls(stalls: list[ParkingStall]) -> list[ParkingStall]:
+    return [replace(stall, id=f"P-{index:03d}") for index, stall in enumerate(stalls, start=1)]
 
 
 def _promoted_network_preview(source: LayoutResult) -> dict[str, object]:
@@ -138,10 +147,14 @@ def _promoted_layout_preview(source: LayoutResult, official: LayoutResult) -> di
             "valid": bool(
                 official.graph_validation.get("valid")
                 and official.maneuver_validation.get("valid")
+                and official.site_constraint_validation.get("valid")
+                and official.engineering_validation.get("valid")
                 and official.operational_quality.get("valid", True)
             ),
             "traffic_graph": official.graph_validation,
             "maneuver_validation": official.maneuver_validation,
+            "site_constraint_validation": official.site_constraint_validation,
+            "engineering_validation": official.engineering_validation,
             "operational_quality": official.operational_quality,
         }
     )
