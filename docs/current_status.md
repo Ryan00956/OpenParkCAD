@@ -1,6 +1,6 @@
 # Current status
 
-OpenParkCAD is an executable `0.1.0` algorithm prototype. Its implementation
+OpenParkCAD `0.2.0` is an executable template-planner prototype. Its implementation
 history reaches Phase 5Q, but the trustworthy product boundary is narrower: it
 generates and evaluates a small family of parking-network templates and exports
 them for engineering inspection.

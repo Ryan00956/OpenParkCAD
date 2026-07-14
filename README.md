@@ -1,8 +1,8 @@
 # OpenParkCAD
 
 OpenParkCAD is a Python-first experimental kernel for generating parking layouts
-inside irregular land parcels. The implementation currently reaches the Phase
-5Q reporting slice, while the package version remains `0.1.0`.
+inside irregular land parcels. Version `0.2.0` is the trustworthy template
+planner baseline built on the Phase 5Q reporting slice.
 
 This is a planning and algorithm-development tool. It is **not** a code-compliance
 checker, a construction-design system, or a substitute for vehicle swept-path,
@@ -167,3 +167,7 @@ on Python 3.10 and 3.12.
 - [Input model](docs/input_model.md)
 - [Algorithm design discussion](docs/algorithm_design_discussion.md)
 - [Detailed phased implementation history](docs/phased_plan.md)
+
+## License
+
+OpenParkCAD is released under the [MIT License](LICENSE).
