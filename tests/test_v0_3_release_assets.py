@@ -73,6 +73,8 @@ def test_package_versions_and_release_documents_are_consistent() -> None:
     version_match = re.search(r'^version = "([^"]+)"$', pyproject, flags=re.MULTILINE)
     assert version_match is not None
     assert version_match.group(1) == openparkcad.__version__ == "0.3.0"
+    assert 'license = "MIT"' in pyproject
+    assert "License :: OSI Approved :: MIT License" not in pyproject
 
     license_text = (ROOT / "LICENSE").read_text(encoding="utf-8")
     assert "MIT License" in license_text
