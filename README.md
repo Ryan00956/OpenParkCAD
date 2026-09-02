@@ -15,31 +15,49 @@ The solver can currently:
 
 - read the documented JSON site model and separate active fields from parsed,
   future-facing fields;
-- generate a straight entrance-connected main aisle, end turnaround,
-  perpendicular branches, and a limited same-side U-shaped connector pattern;
-- generate 90-degree and angled stalls on supported main/branch aisles, and
-  conservative 90-degree stalls on connectors;
+- generate a straight entrance-connected main aisle (two-way, one-way, or
+  opt-in narrow two-way with synthesized passing bays), end turnaround,
+  optional far-end exit aisle for a second exit-capable entrance, perpendicular
+  branches, same-side U connectors, opposite-side short cross junctions,
+  opposite-side outer end-loops, main-aisle lateral-offset candidates
+  (auto-enabled when hard obstacles are present), and optional main-aisle dogleg
+  bypass (centerline front + one or more lateral jogs + adaptive offset spines,
+  with score-positive branches under one budget, and dual entrance exit attach
+  from the rear turnaround with optional L-elbow corridors, including strict
+  one-way) around mid-site obstacles;
+- generate 90-degree, angled, parallel, and t_end stalls on supported
+  main/branch aisles (t_end as dead-end end-caps), plus optional t_end caps on
+  other families via `optimization.enable_t_end_caps`, and conservative
+  90-degree stalls on connectors;
 - enforce hard scoped clearances for polygonal obstacles, reserved areas,
   supported site features, and pedestrian/fire/access-route geometry;
-- validate generated aisle/stall reachability with a traffic graph;
-- apply rectangular and optional L-shaped maneuver-clearance **proxies**;
+- validate generated aisle/stall reachability with a traffic graph, including
+  direction-aware one-way edges and optional reverse-egress arcs;
+- apply rectangular and optional L-shaped maneuver-clearance **proxies**, plus a
+  traffic-side rectangular proxy for parallel stalls;
 - when requested, resolve a design vehicle's turning radius to the rear-axle
-  path and run either conservative analytic checks or the supported
-  perpendicular-90 reverse-in swept-path template;
+  path and run conservative analytic checks for perpendicular-90, angled,
+  parallel, and T-end stalls, or the supported perpendicular-90, acute-angled
+  reverse-in, parallel reverse S-curve, and T-end reverse-in swept-path
+  templates;
 - enforce caller-declared accessible/EV minimum counts from explicit stall-type
   classifications;
 - compare stall types and main/branch stall assignments with an explainable
-  score;
+  score, and report a discrete candidate catalog (official aisles vs
+  greedy- or optional CP-SAT-selected branch/connector skeletons) with
+  selector provenance;
 - create a candidate snapshot, conflict matrix, heuristic shadow selection,
   validated preview layout, and guarded preview promotion;
-- report Phase 5Q operational-risk **proxies** for junctions, entrance throats,
+- report Phase 5R operational-risk **proxies** for junctions, entrance throats,
   routes, directionality, narrow two-way aisles, passing bays, meeting gaps, and
   junction merges; and
 - export layered DXF, SVG preview, and a detailed JSON report.
 
 The phase label describes implementation history, not product readiness. See
 [the current capability matrix](docs/current_status.md) for the precise trust
-boundary and [the roadmap](docs/roadmap.md) for release priorities.
+boundary, [the roadmap](docs/roadmap.md) for release priorities, the
+[examples catalog](docs/examples_catalog.md) for feature demos, and the
+[v0.3 release checklist](docs/v0_3_release_checklist.md) before tagging.
 
 ## Setup
 
@@ -51,9 +69,9 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -e ".[dev]"
 ```
 
-Runtime installation does not require Matplotlib or OR-Tools. The current
-selector is heuristic and does not call OR-Tools. The reserved optimizer extra
-is available only for future CP-SAT work:
+Runtime installation does not require Matplotlib or OR-Tools. The default
+selector is greedy and does not import OR-Tools. The optimizer extra enables
+the optional `optimization.selector_backend=cpsat` shadow selector:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -e ".[dev,optimizer]"
@@ -74,7 +92,7 @@ The JSON report includes the selected layout and score, attempted candidates,
 input diagnostics, traffic-graph validation, maneuver/vehicle validation,
 `site_constraint_validation`, the versioned combined `engineering_validation`,
 `candidate_snapshot`, `candidate_network_preview`, `candidate_layout_preview`,
-`candidate_layout_promotion`, and Phase 5Q `operational_quality`.
+`candidate_layout_promotion`, and Phase 5R `operational_quality`.
 
 ## Selection and promotion
 
@@ -117,19 +135,27 @@ Vehicle-level checks are opt-in under `constraints.maneuvering`:
   outer-front-wheel radius to a rear-axle-center radius, checks vehicle/stall
   fit, and applies a conservative reverse-distance upper bound.
 - `require_swept_path_check: true` uses `active_exact` mode for supported
-  perpendicular-90 stalls. It integrates a constant-curvature low-speed bicycle
-  path exactly, then checks a conservative sampled body envelope against the
-  drivable area, site boundary, centerline policy, and hard exclusions.
+  perpendicular-90 reverse-in, acute-angled reverse-in, parallel reverse
+  S-curve, and T-end reverse-in stalls. It integrates a constant-curvature
+  low-speed bicycle path exactly, then checks a conservative sampled body
+  envelope against the drivable area, site boundary, centerline policy, and
+  hard exclusions.
 
 Both modes require auditable vehicle geometry. In particular,
 `outer_front_wheel` radius input requires wheelbase and track width. A requested
 check fails closed when required parameters are missing, the stall/template is
 unsupported, or the check fails; the older proxy cannot silently turn that into
 a pass. `active_exact` names the path integration mode, not physical-world
-exactness: the current template is one reverse 90-degree constant-radius arc
-plus a straight segment, with exit represented as its time reverse. It does not
-model steering transients, tyres, dynamics, driver variation, or articulated
-vehicles.
+exactness: the current templates are a reverse constant-radius arc (90 degrees
+or the acute stall angle) plus a straight, a straight reverse from the T-end
+court, or two opposite reverse arcs for parallel parking, with exit represented
+as its time reverse. It does not
+model steering transients, tyres, dynamics, or driver variation.
+
+Articulated vehicles (`configuration: "articulated"` or a nested `trailer`)
+never use those bicycle stall templates. A requested swept-path check fails
+closed. Conservative analytic mode then audits combination fit, trailer
+off-tracking versus aisle width, and a tractor-arc-plus-trailer reverse bound.
 
 Hard geometry uses declared `affects`, `priority`, and `authority` semantics.
 Supported obstacle/reserved/feature/route geometry can block stalls, aisles,
@@ -166,9 +192,10 @@ All currently supported dimensions are interpreted as metres.
 
 The model intentionally accepts some fields ahead of enforcement so reports can
 expose unsupported requirements instead of silently discarding them. Hard
-pedestrian/fire geometry is enforced only for its declared geometric exclusion
-scopes; this does not validate route continuity, width/slope rules, emergency
-apparatus movement, or regulatory compliance.
+pedestrian/fire geometry follows its declared exclusion scopes. Requested route
+checks also audit supported contact, connectivity, and accessible polyline-width
+rules; declared slope requirements fail closed without elevation data. These
+checks do not establish emergency-apparatus access or regulatory compliance.
 
 ## Not implemented
 
@@ -176,19 +203,20 @@ The current release does not provide:
 
 - arbitrary road-network synthesis, general intersections, multiple coordinated
   entrances/exits, or a general loop optimizer;
-- general vehicle-path search, multi-point maneuvers, exact swept paths for
-  angled/parallel/T-end stalls, steering transients, tyre/dynamic behavior, or
-  articulated/emergency-vehicle models;
+- general vehicle-path search, multi-point maneuvers, steering transients,
+  tyre/dynamic behavior, exact articulated swept paths, or emergency-vehicle
+  models;
 - dynamic traffic, arrival/priority simulation, or capacity/queue analysis;
-- pedestrian/fire/access-route connectivity and usability analysis, accessible
-  stall dimensional certification, EV equipment layout, slope/drainage checks,
-  or built-in local-code profiles;
-- global CP-SAT/MIP optimization (the current selector is greedy/heuristic);
+- general pedestrian/fire-route planning, statutory accessible-stall dimensional
+  certification, EV equipment design, slope/drainage analysis, or built-in
+  local-code profiles;
+- global layout optimization beyond the discrete shadow candidate catalog;
 - DXF/site-survey import, interactive editing, or a graphical application; or
 - certification that generated drawings are construction-ready or compliant.
 
-Parallel stalls, T-end stalls, connector-side angled stalls, and non-90-degree
-perpendicular stalls are also outside the active generation path.
+Connector-side T-end stalls and non-90-degree perpendicular stalls remain
+outside the active generation path. Supported parallel and T-end stalls can
+use the requested vehicle templates described above.
 
 ## Development
 
@@ -203,6 +231,7 @@ on Python 3.10 and 3.12.
 
 ## Design documents
 
+- [Documentation index and workspace layout](docs/README.md)
 - [Changelog](CHANGELOG.md)
 - [Current status and capability matrix](docs/current_status.md)
 - [Roadmap](docs/roadmap.md)

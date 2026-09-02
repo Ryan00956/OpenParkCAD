@@ -394,9 +394,25 @@ Current v0.3 behavior:
   stall/aisle/swept-path exclusions;
 - advisory/future routes remain visible but non-blocking;
 - `emergency_access_required` requires hard fire/access geometry, and a positive
-  accessible quota requires hard accessible-route geometry; and
-- route continuity, slope/width compliance, pedestrian conflict scoring, and
-  fire-apparatus swept paths remain future work.
+  accessible quota requires hard accessible-route geometry;
+- classified accessible stalls must geometrically reach a hard accessible route
+  when `accessible_min` is positive (`constraints.accessible_route_touch_tolerance`,
+  default 1.5 m);
+- hard fire/access routes must geometrically reach an entrance gate when
+  `emergency_access_required` is set (`constraints.emergency_route_touch_tolerance`,
+  default 1.0 m);
+- classified EV stalls must geometrically reach a placed charging post when
+  `ev_min` is positive and hard `charging_post` / `ev_charger` site features
+  exist (`constraints.ev_charger_touch_tolerance`, default 2.0 m);
+- serving accessible-route pieces must form one contact network, and
+  `accessible_routes.connects` ids (except reserved stall tokens) must name
+  existing site feature / reserved / entrance / route geometry that the
+  serving network can reach;
+- declared `min_width` is checked against `polyline_buffer` width; other
+  geometries fail closed as unauditable; declared `max_slope` fail-closes
+  because elevation is not modeled; and
+- ADA path graphs, pedestrian conflict scoring, electrical equipment design,
+  and fire-apparatus swept paths remain future work.
 
 This module is important because fire access, accessible routes, and pedestrian
 safety often override stall-count optimization.
@@ -585,11 +601,48 @@ cannot realistically reach and use it.
       "front_overhang": 1.0,
       "rear_overhang": 1.0,
       "swept_path_margin": 0.3,
-      "max_reverse_distance": 12.0
+      "max_reverse_distance": 12.0,
+      "configuration": "rigid"
     }
   }
 }
 ```
+
+Articulated vehicles add a hitch and trailer. Presence of `trailer` implies
+`configuration: "articulated"` when the field is omitted:
+
+```json
+{
+  "vehicles": {
+    "design_vehicle": {
+      "id": "wb-15",
+      "configuration": "articulated",
+      "length": 6.2,
+      "width": 2.55,
+      "wheelbase": 3.8,
+      "min_turning_radius": 12.0,
+      "turning_radius_reference": "outer_front_wheel",
+      "track_width": 2.0,
+      "front_overhang": 1.4,
+      "rear_overhang": 1.0,
+      "hitch_offset": 0.5,
+      "swept_path_margin": 0.3,
+      "max_reverse_distance": 40.0,
+      "trailer": {
+        "length": 13.6,
+        "width": 2.55,
+        "wheelbase": 8.0,
+        "front_overhang": 1.5,
+        "rear_overhang": 4.1
+      }
+    }
+  }
+}
+```
+
+`hitch_offset` is the tractor-rear-axle to hitch distance, positive toward the
+rear. If omitted, conservative checks assume zero and report that assumption.
+Unknown `configuration` values without a trailer fail closed.
 
 `turning_radius_reference` is required to interpret the declared radius:
 
@@ -605,11 +658,18 @@ that assumption is reported.
 With `require_swept_path_check: false`, requested turning/reverse checks use the
 `active_conservative` analytic mode: radius conversion, vehicle/stall fit, and a
 quarter-turn-plus-stall reverse upper bound. With it set to `true`,
-`active_exact` supports perpendicular-90 reverse-in stalls only. It integrates a
-constant-curvature bicycle arc and straight segment exactly, but collision uses
-a conservative envelope between sampled body poses. Unsupported templates,
-missing parameters, boundary/centerline/hard-exclusion conflicts, and excessive
-reverse distance fail closed.
+`active_exact` supports perpendicular-90 reverse-in, acute-angled reverse-in,
+parallel reverse S-curve, and T-end reverse-in from the serving turnaround.
+Perpendicular, angled, and T-end templates integrate a constant-curvature
+bicycle arc and straight segment; parallel uses two equal-radius opposite
+reverse arcs. Collision uses a conservative envelope between sampled body
+poses. Unsupported templates (obtuse approaches, multi-leg site paths, articulated
+vehicles), missing parameters, boundary/centerline/hard-exclusion conflicts, and
+excessive reverse distance fail closed. Articulated vehicles never run the rigid
+bicycle stall templates. Without `require_swept_path_check`, they use a
+conservative analytic: combination length/width versus the stall, steady-state
+trailer off-tracking versus declared aisle width, and a tractor quarter-arc plus
+trailer-length reverse bound.
 
 ## 10. Aisle Information
 
@@ -797,12 +857,14 @@ Constraints should include hard rules that invalidate a layout.
 }
 ```
 
-These requests are active in v0.3 for supported perpendicular-90 stalls. A swept
-path or reverse-distance request also activates turning radius as a prerequisite
-for constructing/bounding the path; `declared_requests` preserves what the
-caller explicitly set. The stricter of the vehicle and constraint
-reverse-distance limits is used. If a hard request cannot run, the layout is
-invalid; legacy rectangular/L-shaped proxies are not a fallback pass.
+These requests are active in v0.3 for supported perpendicular-90 reverse-in,
+acute-angled reverse-in, parallel reverse S-curve, and T-end reverse-in stalls.
+A swept path or reverse-distance request also
+activates turning radius as a prerequisite for constructing/bounding the path;
+`declared_requests` preserves what the caller explicitly set. The stricter of
+the vehicle and constraint reverse-distance limits is used. If a hard request
+cannot run, the layout is invalid; legacy rectangular/L-shaped proxies are not
+a fallback pass.
 
 ## 12. Optimization Preferences
 
@@ -817,8 +879,15 @@ Optimization settings should not be mixed with hard constraints.
       "aisle_area": -1.0,
       "dead_end": -30.0,
       "reverse_distance": -5.0,
-      "conflict_point": -10.0
+      "conflict_point": -10.0,
+      "stall_family": {
+        "perpendicular": 100.0,
+        "parallel": 80.0,
+        "angled": 90.0
+      },
+      "segment_family_mix": 0.0
     },
+    "prefer_uniform_segments": false,
     "connector_allow_l_shape_end_stalls": true,
     "maneuver_l_shape_fallback": true
   }
@@ -837,6 +906,11 @@ balanced
 conservative
   Penalize operational risk heavily.
 ```
+
+`weights.stall_family` optionally values perpendicular / parallel / angled /
+t_end stalls differently. `weights.segment_family_mix` (or
+`prefer_uniform_segments`) is a per-aisle-side mix penalty; 0 keeps independent
+per-segment family picks. Neither is a statutory mix rule.
 
 ## 13. Diagnostics
 
@@ -984,7 +1058,14 @@ site.obstacles polygon                  active hard exclusion with effective cle
 site.reserved_areas                     active for supported geometry and declared stall/aisle/swept scopes
 site_features                           active for declared hard scopes; advisory shapes remain non-blocking; passing bays feed Phase 5Q
 entrances center / width / heading      active for straight main aisle
-pedestrian / accessible routes          active geometric exclusions when hard; no continuity/usability proof
+pedestrian / accessible routes          active geometric exclusions when hard
+accessible stall-to-route reachability  active when accessible_min > 0; geometric contact only
+accessible-route continuity             active when accessible_min > 0; piece contact + connects destinations
+accessible-route min_width / max_slope  active when declared; polyline width audited, slope unsupported without elevation
+accessible/EV contact filter            active when quota + contact geometry exist; drops unreachable classified stalls
+accessible/EV contact retarget          active when quota + classified type + contact geometry; converts adjacent same-family stalls, may drop overlapping same-side neighbors, pack a contiguous contact run, or fill empty contact-band pavement on an existing aisle (perpendicular, parallel, or angled)
+emergency route-to-entrance             active when emergency_access_required; geometric contact only
+EV stall-to-charger reachability        active when ev_min > 0 and hard charging posts are placed
 fire / emergency access routes          active geometric exclusions when hard; no fire-apparatus model
 parking.stall_types standard-90         active
 parking stall classifications           active for accessible/EV quota identity
@@ -992,21 +1073,60 @@ parking accessible_min / ev_min quotas  active hard minimums on final layout
 parking angled maneuver rule            active proxy for generated main/branch stalls
 parking angled main-aisle generation    active, main aisle only
 parking angled branch generation        active
-parking angled connector generation     documented, future
-parking parallel / t_end                documented, future
+parking angled connector generation     active official connector-side angled stalls
+parking parallel main/branch generation active
+parking parallel maneuver proxy         active traffic-side rectangle; exact S-curve is a separate vehicle check
+parking parallel connector              active official connector-side parallel stalls
+parking t_end main/branch generation    active dead-end end-cap bays on straight, dogleg, and multi-jog rear turnarounds; exact swept path insets far edge by swept_path_margin
+parking t_end caps on other families    active via optimization.enable_t_end_caps
+parking t_end maneuver proxy            active front-access turnaround rectangle
 parking maneuver rule dispatch          active for active/future rule reporting
 parking enabled stall type candidates   active for enumerative comparison
 stall drive_over                        documented, future maneuver rule
-stall access_sides / blocked_sides      documented, future maneuver rule
+stall access_sides / blocked_sides      active for parallel traffic-side access; otherwise future
 vehicles design_vehicle                 active when requested; otherwise parsed/available
+vehicles articulated                    parsed trailer/hitch; conservative analytic when requested; exact swept path fail-closed
 vehicle outer-front-wheel radius        active audited conversion; explicit track width required for hard check
 vehicle rear-axle-center radius          active direct reference
 vehicle conservative analytic check     active optional turning/fit/reverse upper-bound mode
+vehicle articulated analytic check      active combination fit + trailer off-tracking + tractor-arc-plus-trailer reverse bound
+vehicle parallel analytic check         active fit + reverse length bound; exact S-curve when swept_path is requested
+vehicle t_end analytic check            active fit + reverse-in length bound; exact when swept_path is requested
 vehicle perpendicular-90 swept template active optional exact-path/conservative-envelope mode
-vehicle angled/parallel/T-end exact path documented, future and fail-closed if requested
+vehicle angled reverse-in swept template active optional exact-path/conservative-envelope mode
+vehicle angled analytic check           active scaled-arc fit + reverse bound; exact when swept_path is requested
+vehicle parallel reverse S-curve        active optional two-arc exact-path/conservative-envelope mode
+vehicle T-end reverse-in swept template active straight reverse from turnaround/parent court; 90-degree fallback
 aisles fixed wide two-way               active first
-aisles narrow one-way                   future graph phase
-aisles narrow two-way                   disabled until deadlock checks exist
+aisles fixed one-way (incl. narrow)     active generation + direction-aware graph
+aisles narrow two-way                   active when enable_passing_bay_synthesis (or auto with operational_min_passing_bays)
+aisles passing-bay synthesis            active via enable_passing_bay_synthesis; role=passing_bay + site_features; non-circulation graph
+optimization.passing_bay_length/width/spacing  active optional bay geometry/spacing
+entrances dual entry/exit attach        active via enable_dual_entrance (default on) when a far exit-capable gate exists
+entrances dogleg dual-exit corridors    active; turnaround-relative lateral + optional L-elbow; optimization.exit_lateral_budget optional
+aisles main lateral offset candidates   active via enable_main_aisle_lateral_offsets / main_aisle_lateral_offsets; also auto when prefer_obstacle_clearance or auto_lateral_offsets_for_obstacles
+aisles main dogleg bypass               active via enable_main_aisle_dogleg, or auto when obstacles + prefer_obstacle_clearance; mode phase1_main_aisle_dogleg
+aisles main multi-jog bypass            active under dogleg enablement when ≥2 jogs improve depth; mode phase1_main_aisle_multi_jog
+optimization.max_dogleg_jogs            active cap on chained jogs (default 3; multi-jog needs ≥2)
+aisles multi-spine branches             active when enable_branches; all dogleg/multi-jog main segments share max_branches; connectors scoped per parent
+aisles dogleg multi-spine branches      active (alias of multi-spine branches for front/rear dogleg)
+optimization.dogleg_offsets             active optional lateral offset list for dogleg/multi-jog spines (±aisle widths default)
+optimization.enable_adaptive_dogleg_offsets  active; default on with obstacles + dogleg/clearance preference; merges envelope-based offsets
+optimization.auto_lateral_offsets_for_obstacles  active opt-in (also implied by prefer_obstacle_clearance)
+optimization.prefer_obstacle_clearance  active opt-in score weight + lateral offset fan-out (+ dogleg auto-enable)
+optimization.obstacle_clearance_weight  active intensity when prefer_obstacle_clearance (default 10; weights.* override)
+optimization.obstacle_clearance_cap     active metres cap for clearance metric (default 12)
+branch clip diagnostics                 active on branch candidates (clear_length / open_boundary_length / clip_amount)
+optimization.branch_clear_length_bonus  active soft greedy-branch bonus per clear metre (default 0.35)
+optimization.branch_clip_penalty        active soft greedy-branch penalty per clipped metre (default 0.2)
+optimization.branch_clipped_side_penalty active soft penalty when side is clipped and opposite is freer
+aisles same-side U connector            active
+aisles opposite-side cross connector    active via enable_opposite_connectors (default on)
+aisles opposite-side end-loop           active via enable_opposite_end_loops (default with opposite)
+optimization.prefer_loops               active opt-in connector loop score bonus
+optimization.prefer_obstacle_clearance  active opt-in clearance score bonus
+constraints.circulation.one_way_allows_reverse_egress  active (default true) for stall egress on one-way modules
+aisles narrow two-way                   active opt-in with passing-bay synthesis (deadlock still proxy-only via Phase 5Q)
 constraints entrance-to-main-aisle      active first
 constraints dead-end turnaround         active first
 constraints stall-to-aisle association  active first
@@ -1016,7 +1136,7 @@ constraints maneuvering access envelope active as Phase 3A proxy
 constraints turning sweep proxy         active as Phase 3B proxy
 constraints maneuver rule support       active for Phase 3C-1 dispatch
 constraints exact turning radius        active for supported vehicle mode
-constraints swept path                  active for perpendicular-90 reverse-in template only
+constraints swept path                  active for perpendicular-90, acute-angled, parallel S-curve, and T-end reverse-in
 constraints reverse distance            active exact measurement or conservative upper bound
 constraints scoped hard exclusions      active for stall, aisle, and swept-path purposes
 constraints authority / priority        active and report-visible; no built-in jurisdictional rules
@@ -1026,6 +1146,18 @@ optimization branch_start_positions     active for perpendicular branch trials
 optimization branch_start_step          active for branch start auto-sampling
 optimization branch_sides               active for branch side filtering
 optimization max_branches               active for limited multi-branch search
+optimization.selector_backend           active greedy default; cpsat uses OR-Tools when installed, else fail-closes to greedy
+optimization stall modules              active per-side strips (`stall_module`); depend on parent aisle; preview uses selected modules
+optimization stall module families      active on spine, branch, and connectors; at most one stall_type per family_slot (side or segment)
+optimization.stall_module_segment_stalls  active default 4 stalls per module; explicit 0 = whole side
+optimization.mixed_segment_scoring      active when multiple families, stall_family weights, or mix penalty requested
+optimization.weights.stall_family       optional per-family stall value; default is weights.stall_count / selector 100
+optimization.weights.segment_family_mix optional penalty per mixed aisle-side; prefer_uniform_segments sets -50
+optimization.weights.accessible_contact extra shadow points per reachable accessible stall (default 100)
+optimization.weights.ev_contact         extra shadow points per reachable EV stall (default 100)
+optimization.selector_time_limit_seconds  active for CP-SAT (default 2)
+optimization.selector_seed              active optional CP-SAT random seed
+optimization discrete candidate catalog active: official aisles=base, branch/connector skeletons=variable
 optimization enable_connectors          active for same-side branch connectors
 optimization connector_allow_outer_stall_row active for inset U-connector placement
 optimization connector_inset_depths     active for connector setback candidate search
@@ -1067,10 +1199,12 @@ optimization operational_max_passing_bay_spacing active for Phase 5K passing bay
 optimization operational_passing_bay_spacing_risk active for Phase 5K passing bay spacing risk score
 optimization operational_narrow_two_way_meeting_gap_risk active for Phase 5M narrow two-way meeting risk score
 optimization operational_narrow_two_way_junction_merge_risk active for Phase 5Q narrow two-way junction merge risk score
+optimization operational_pedestrian_conflict_risk available Phase 5R per-issue pedestrian proximity/crossing risk (default 0)
+optimization operational_pedestrian_conflict_clearance available metres beyond walkway (default 0 = contact only)
 optimization weights.operational_risk active for Phase 5Q soft-risk scoring
 optimization weights                    active for Phase 1 scoring
 optimization score breakdown            active in JSON report
-optimization promote_candidate_layout_preview active as guarded opt-in
+optimization promote_candidate_layout_preview active as guarded opt-in; official aisle IDs rebuilt from catalog source_id
 report aisles / stalls traceability      active in JSON report
 report selected_branches                active in JSON report
 report selected_connectors              active, includes removed and added stalls
@@ -1080,7 +1214,7 @@ report maneuver_validation rule_counts  active in JSON report
 report vehicle_validation               active/not_requested/active_failed with per-stall mode and provenance
 report site_constraint_validation       active with definitions, authority, conflicts, and quotas
 report engineering_validation           active combined versioned decision with active/advisory/unsupported/failed rules
-report operational_quality              active as Phase 5Q local, route, summary, directionality, narrow two-way, passing bay geometry/spacing/entrance-junction/mid-aisle junction meeting, and junction-merge risk report
+report operational_quality              active as Phase 5R local, route, summary, directionality, narrow two-way, passing bay, junction-merge, and pedestrian-conflict proxy report
 report selected_stall_type_id           active in JSON report
 report stall_type_attempts              active in JSON report
 report selected_stall_assignment        active in JSON report
