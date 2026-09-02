@@ -51,6 +51,22 @@ def stall_module_segment_stalls(optimization: dict | None) -> int:
         return 0
 
 
+def parse_selector_num_workers(optimization: dict | None) -> int | None:
+    """Return an explicit CP-SAT worker count, or None to keep OR-Tools defaults.
+
+    The key is optional. ``None`` / omitted leaves solver.parameters.num_search_workers
+    untouched. Booleans and non-positive values are illegal.
+    """
+    if not isinstance(optimization, dict) or "selector_num_workers" not in optimization:
+        return None
+    raw = optimization["selector_num_workers"]
+    if raw is None:
+        return None
+    if isinstance(raw, bool) or not isinstance(raw, int) or raw < 1:
+        raise ValueError("optimization.selector_num_workers must be a positive integer")
+    return raw
+
+
 def requested_selector_backend(raw: object) -> tuple[str, str | None]:
     """Return (requested_backend, parse_fallback_reason).
 

@@ -599,6 +599,7 @@ def _field_support(site: SiteSpec, layout: LayoutResult | None) -> dict[str, str
             else "available"
         ),
         "optimization.selector_backend_cpsat": _cpsat_backend_status(layout),
+        "optimization.selector_num_workers": _selector_num_workers_status(site, layout),
         "optimization.shadow_candidate_selector": "active" if layout and layout.candidate_selection else "future",
         "optimization.candidate_network_preview": "active" if layout and layout.candidate_network_preview else "future",
         "optimization.candidate_shadow_branch_turnarounds": "active" if _shadow_turnarounds_active(layout) else "future",
@@ -976,6 +977,18 @@ def _passing_bay_synthesis_status(site: SiteSpec, layout: LayoutResult | None) -
 def _generation_mode_status(layout: LayoutResult | None, mode: str) -> str:
     if layout and layout.generation_mode == mode:
         return "active"
+    return "available"
+
+
+def _selector_num_workers_status(site: SiteSpec, layout: LayoutResult | None) -> str:
+    if "selector_num_workers" not in site.optimization:
+        return "available"
+    selection = layout.candidate_selection if layout and isinstance(layout.candidate_selection, dict) else {}
+    provenance = selection.get("solver_provenance") if isinstance(selection.get("solver_provenance"), dict) else {}
+    if selection.get("backend") == "cpsat" and provenance.get("num_workers") is not None:
+        return "active"
+    if selection.get("requested_backend") == "cpsat" and selection.get("backend") != "cpsat":
+        return "active_failed"
     return "available"
 
 

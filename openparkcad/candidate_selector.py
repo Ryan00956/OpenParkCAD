@@ -9,6 +9,7 @@ from openparkcad.candidate_catalog import (
     STALL_MODULE_KIND,
     STALL_MODULE_ROLE,
     VARIABLE_AISLE_ROLES,
+    parse_selector_num_workers,
     requested_selector_backend,
     selection_class,
 )
@@ -37,6 +38,7 @@ def select_candidate_objects(objects: list[CandidateObject], site: SiteSpec | No
     provenance = {
         "backend": "greedy",
         "seed": None,
+        "num_workers": None,
         "time_limit_seconds": None,
         "objective_bound": None,
         "gap": None,
@@ -53,6 +55,7 @@ def select_candidate_objects(objects: list[CandidateObject], site: SiteSpec | No
             max_branches=max_branches,
             time_limit_seconds=_selector_time_limit(site),
             seed=_selector_seed(site),
+            num_workers=_selector_num_workers(site),
             source_id=_source_id,
             connects=_connects,
             mix_weight=mix_weight,
@@ -223,6 +226,12 @@ def _selector_seed(site: SiteSpec | None) -> int | None:
         return int(raw)
     except (TypeError, ValueError):
         return None
+
+
+def _selector_num_workers(site: SiteSpec | None) -> int | None:
+    if site is None:
+        return None
+    return parse_selector_num_workers(site.optimization)
 
 
 def _eligible(candidate: CandidateObject) -> bool:

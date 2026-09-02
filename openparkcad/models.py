@@ -286,7 +286,7 @@ def _phase0_site_from_dict(data: dict[str, Any]) -> SiteSpec:
         pedestrian_and_emergency=_dict(data.get("pedestrian_and_emergency", {}), "pedestrian_and_emergency"),
         parking_quotas=_parking_quotas(parking_data),
         constraints=constraints,
-        optimization=_dict(data.get("optimization", {}), "optimization"),
+        optimization=_optimization(_dict(data.get("optimization", {}), "optimization")),
         diagnostics=_dict(data.get("diagnostics", {}), "diagnostics"),
         metadata=_dict(data.get("metadata", {}), "metadata"),
         source_format="phase0",
@@ -298,6 +298,13 @@ def _dict(raw: Any, label: str) -> dict[str, Any]:
         return {}
     if not isinstance(raw, dict):
         raise ValueError(f"{label} must be an object")
+    return raw
+
+
+def _optimization(raw: dict[str, Any]) -> dict[str, Any]:
+    from openparkcad.candidate_catalog import parse_selector_num_workers
+
+    parse_selector_num_workers(raw)
     return raw
 
 

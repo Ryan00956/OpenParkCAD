@@ -23,6 +23,7 @@ def try_solve_cpsat(
     source_id,
     connects,
     mix_weight: float = 0.0,
+    num_workers: int | None = None,
 ) -> tuple[dict[str, object] | None, str | None]:
     """Solve the shadow aisle-skeleton catalog with CP-SAT.
 
@@ -117,6 +118,8 @@ def try_solve_cpsat(
         solver.parameters.max_time_in_seconds = float(time_limit_seconds)
         if seed is not None:
             solver.parameters.random_seed = int(seed)
+        if num_workers is not None:
+            solver.parameters.num_search_workers = int(num_workers)
         status = solver.Solve(model)
     except Exception:
         return None, "cpsat_backend_failed"
@@ -148,6 +151,7 @@ def try_solve_cpsat(
         "solver_provenance": {
             "backend": "cpsat",
             "seed": seed,
+            "num_workers": int(num_workers) if num_workers is not None else None,
             "time_limit_seconds": float(time_limit_seconds),
             "objective_bound": bound,
             "gap": gap,

@@ -148,7 +148,17 @@
       },
       "additionalProperties": true
     },
-    "optimization": {"type": "object", "additionalProperties": true},
+    "optimization": {
+      "type": "object",
+      "properties": {
+        "selector_num_workers": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Optional CP-SAT search worker count. Omitted keeps the OR-Tools default."
+        }
+      },
+      "additionalProperties": true
+    },
     "diagnostics": {"type": "object", "additionalProperties": true},
     "metadata": {"type": "object", "additionalProperties": true},
     "regression_expectations": {"type": "object", "additionalProperties": true}

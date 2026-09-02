@@ -232,8 +232,9 @@ def extract_backend(layout: LayoutResult | None) -> dict[str, Any]:
     requested = selection.get("requested_backend")
     actual = selection.get("backend")
     fallback = selection.get("backend_fallback_reason")
-    workers = provenance.get("num_workers") if "num_workers" in provenance else None
-    if workers is None:
+    if provenance and "num_workers" in provenance:
+        workers = provenance.get("num_workers")
+    else:
         workers = NOT_AVAILABLE
     return {
         "requested_backend": requested if requested is not None else NOT_AVAILABLE,

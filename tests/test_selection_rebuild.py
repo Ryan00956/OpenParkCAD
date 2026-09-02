@@ -1,7 +1,5 @@
 """Rebuild official geometry from selected skeletons using catalog source ids."""
 
-import pytest
-
 from openparkcad.candidate_catalog import PROMOTION_VERSION
 from openparkcad.generator import generate_layout
 from openparkcad.models import AisleClassSpec, EntranceSpec, SiteSpec, StallSpec
@@ -84,7 +82,9 @@ def test_promotion_rewrites_official_aisles_to_catalog_source_ids():
 
 
 def test_cpsat_promotion_uses_selector_sources_on_official_layout():
-    pytest.importorskip("ortools")
+    from tests.ortools_util import require_ortools
+
+    require_ortools()
     layout = generate_layout(_branch_site(promote_candidate_layout_preview=True, selector_backend="cpsat"))
     assert layout.generation_mode == "candidate_layout_promoted"
     assert layout.candidate_layout_promotion["pre_promotion_backend"] == "cpsat"
