@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/Ryan00956/OpenParkCAD/blob/main/schema/openparkcad-input.schema.json",
+  "$id": "https://github.com/helenananaa/OpenParkCAD/blob/main/schema/openparkcad-input.schema.json",
   "title": "OpenParkCAD input",
   "description": "Machine-readable shape for OpenParkCAD inputs. Schema acceptance does not imply that every declared rule is enforced; inspect report support status.",
   "type": "object",
@@ -141,7 +141,10 @@
             "max_reverse_distance": {"type": "number", "exclusiveMinimum": 0}
           },
           "additionalProperties": true
-        }
+        },
+        "accessible_route_touch_tolerance": {"type": "number", "minimum": 0},
+        "emergency_route_touch_tolerance": {"type": "number", "minimum": 0},
+        "ev_charger_touch_tolerance": {"type": "number", "minimum": 0}
       },
       "additionalProperties": true
     },
@@ -239,7 +242,13 @@
         "priority": {
           "type": "string",
           "enum": ["hard", "advisory", "soft", "draw_only", "future"]
-        }
+        },
+        "connects": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1}
+        },
+        "min_width": {"type": "number", "exclusiveMinimum": 0},
+        "max_slope": {"type": "number", "minimum": 0}
       },
       "additionalProperties": true
     },
@@ -278,7 +287,23 @@
         "front_overhang": {"type": "number", "minimum": 0},
         "rear_overhang": {"type": "number", "minimum": 0},
         "swept_path_margin": {"type": "number", "minimum": 0},
-        "max_reverse_distance": {"type": "number", "exclusiveMinimum": 0}
+        "max_reverse_distance": {"type": "number", "exclusiveMinimum": 0},
+        "configuration": {"type": "string", "enum": ["rigid", "articulated"]},
+        "hitch_offset": {"type": "number"},
+        "trailer": {"$ref": "#/$defs/trailer"}
+      },
+      "additionalProperties": true
+    },
+    "trailer": {
+      "type": "object",
+      "required": ["length", "width"],
+      "properties": {
+        "length": {"type": "number", "exclusiveMinimum": 0},
+        "width": {"type": "number", "exclusiveMinimum": 0},
+        "wheelbase": {"type": "number", "exclusiveMinimum": 0},
+        "track_width": {"type": "number", "exclusiveMinimum": 0},
+        "front_overhang": {"type": "number", "minimum": 0},
+        "rear_overhang": {"type": "number", "minimum": 0}
       },
       "additionalProperties": true
     },

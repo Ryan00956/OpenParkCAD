@@ -2,18 +2,29 @@ from __future__ import annotations
 
 import math
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from shapely.geometry import LineString, Polygon as ShapelyPolygon
 from shapely.ops import unary_union
 
 from openparkcad.layout_geometry import area_overlaps, available_area, polygon_points
-from openparkcad.models import LayoutResult, ParkingStall, SiteSpec, StallSpec, VehicleSpec
-from openparkcad.phase1_support import fixed_aisle_class
+from openparkcad.models import (
+    LayoutResult,
+    ParkingStall,
+    SiteSpec,
+    StallSpec,
+    VehicleSpec,
+    is_articulated_vehicle,
+)
+from openparkcad.phase1_support import angled_module_angle, fixed_aisle_class
 from openparkcad.site_constraints import constraint_conflicts, site_usable_area
 from openparkcad.swept_path import resolve_vehicle_overhangs, validate_stall_swept_path
-from openparkcad.vehicle_kinematics import rear_axle_turning_radius
+from openparkcad.vehicle_kinematics import (
+    articulated_off_tracking,
+    rear_axle_turning_radius,
+    resolve_articulated_geometry,
+)
 
 
 @dataclass(frozen=True)
@@ -23,6 +34,7 @@ class ManeuverContext:
     drivable: Any
     usable: Any
     swept_usable: Any
+    parent_aisle_ids: dict[str, str | None] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -86,6 +98,7 @@ def validate_maneuvers(layout: LayoutResult) -> dict[str, Any]:
         drivable=drivable,
         usable=usable,
         swept_usable=site_usable_area(layout.site, "swept_path"),
+        parent_aisle_ids={aisle.id: aisle.parent_aisle_id for aisle in layout.aisles},
     )
     invalid: list[dict[str, Any]] = []
     envelopes: list[dict[str, Any]] = []
@@ -188,6 +201,41 @@ def _angled_access_envelope(context: ManeuverContext, stall: ParkingStall) -> di
     )
 
 
+def _parallel_access_envelope(context: ManeuverContext, stall: ParkingStall) -> dict[str, Any]:
+    """Conservative parallel-parking proxy: traffic-side strip plus longitudinal buffer.
+
+    This is not an S-curve reverse-parallel path. It only checks that a rectangle
+    from the aisle-facing long edge into the serving aisle remains mostly
+    drivable and inside usable site geometry.
+    """
+    site = context.site
+    stall_spec = _stall_spec_for_stall(site, stall)
+    return _front_access_envelope(
+        context,
+        stall,
+        target_edge_width=stall_spec.length,
+        access_depth=_parallel_access_depth(site, stall_spec),
+        turn_buffer_length=_parallel_turn_buffer_length(site, stall_spec),
+        minimum_coverage_ratio=_minimum_parallel_coverage_ratio(site),
+        minimum_turn_coverage_ratio=_minimum_parallel_turn_coverage_ratio(site),
+    )
+
+
+def _t_end_access_envelope(context: ManeuverContext, stall: ParkingStall) -> dict[str, Any]:
+    """T-end stalls face the dead-end turnaround; reuse the perpendicular front proxy."""
+    site = context.site
+    stall_spec = _stall_spec_for_stall(site, stall)
+    return _front_access_envelope(
+        context,
+        stall,
+        target_edge_width=stall_spec.width,
+        access_depth=_access_depth(site),
+        turn_buffer_length=_turn_buffer_length(site, stall_spec),
+        minimum_coverage_ratio=_minimum_coverage_ratio(site),
+        minimum_turn_coverage_ratio=_minimum_turn_coverage_ratio(site),
+    )
+
+
 def _front_access_envelope(
     context: ManeuverContext,
     stall: ParkingStall,
@@ -245,6 +293,13 @@ def _unsupported_maneuver_rule(reason: str) -> Callable[[ManeuverContext, Parkin
 def _rule_for_stall(site: SiteSpec, stall: ParkingStall) -> ManeuverRule:
     stall_spec = _stall_spec_for_stall(site, stall)
     family = stall_spec.family
+    if stall.aisle_side == "end" or family == "t_end":
+        return ManeuverRule(
+            id="t_end_proxy",
+            family="t_end",
+            status="active",
+            evaluate=_t_end_access_envelope,
+        )
     if family == "perpendicular" and _angle_supported_for_perpendicular(stall_spec, stall):
         return ManeuverRule(
             id="perpendicular_90_proxy",
@@ -268,17 +323,10 @@ def _rule_for_stall(site: SiteSpec, stall: ParkingStall) -> ManeuverRule:
         )
     if family == "parallel":
         return ManeuverRule(
-            id="parallel_future",
+            id="parallel_proxy",
             family=family,
-            status="future",
-            evaluate=_unsupported_maneuver_rule("parallel_maneuver_rule_not_implemented"),
-        )
-    if family == "t_end":
-        return ManeuverRule(
-            id="t_end_future",
-            family=family,
-            status="future",
-            evaluate=_unsupported_maneuver_rule("t_end_maneuver_rule_not_implemented"),
+            status="active",
+            evaluate=_parallel_access_envelope,
         )
     return ManeuverRule(
         id="unknown_family_future",
@@ -299,8 +347,12 @@ def _rule_support_report(site: SiteSpec) -> dict[str, str]:
         ),
         "perpendicular_non_90": "future",
         "angled_proxy": "active" if "angled" in active_families else "available",
-        "parallel": "future",
-        "t_end": "future",
+        "parallel_proxy": "active" if "parallel" in active_families else "available",
+        "t_end_proxy": (
+            "active"
+            if "t_end" in active_families or _boolean_setting(site.optimization.get("enable_t_end_caps", False))
+            else "available"
+        ),
     }
 
 
@@ -309,6 +361,11 @@ def _angle_supported_for_perpendicular(stall_spec: StallSpec, stall: ParkingStal
     if not _angle_allowed(90.0, stall_spec.allowed_angles):
         return False
     return True
+
+
+def _angle_supported_for_angled(stall_spec: StallSpec, stall: ParkingStall) -> bool:
+    _ = stall
+    return angled_module_angle(stall_spec.allowed_angles) is not None
 
 
 def _angle_allowed(angle: float, allowed_angles: tuple[float, ...]) -> bool:
@@ -588,6 +645,33 @@ def _angled_turn_buffer_length(site: SiteSpec, stall_spec: StallSpec) -> float:
     return max(value, 0.0)
 
 
+def _parallel_access_depth(site: SiteSpec, stall_spec: StallSpec) -> float:
+    # Parallel pull-in needs a lateral strip into the aisle, not full reverse-in depth.
+    default = min(site.aisle_width * 0.55, max(stall_spec.width * 1.25, 2.5))
+    if site.vehicle:
+        default = min(site.aisle_width * 0.65, max(site.vehicle.width + site.vehicle.swept_path_margin + 0.5, default))
+    raw = site.optimization.get("maneuver_parallel_access_depth", default)
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        value = default
+    return max(value, 0.0)
+
+
+def _parallel_turn_buffer_length(site: SiteSpec, stall_spec: StallSpec) -> float:
+    # Longitudinal room for a conservative parallel-park approach/exit strip.
+    # Keep this modest: large buffers clip past aisle ends and over-reject valid stalls.
+    default = min(stall_spec.length * 0.2, max(stall_spec.width * 0.5, 1.0))
+    if site.vehicle:
+        default = min(stall_spec.length * 0.25, max(site.vehicle.width * 0.5, default))
+    raw = site.optimization.get("maneuver_parallel_turn_buffer_length", default)
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        value = default
+    return max(value, 0.0)
+
+
 def _minimum_coverage_ratio(site: SiteSpec) -> float:
     raw = site.optimization.get("maneuver_access_coverage_ratio", 0.95)
     try:
@@ -599,6 +683,15 @@ def _minimum_coverage_ratio(site: SiteSpec) -> float:
 
 def _minimum_angled_coverage_ratio(site: SiteSpec) -> float:
     raw = site.optimization.get("maneuver_angled_access_coverage_ratio", _minimum_coverage_ratio(site))
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        value = _minimum_coverage_ratio(site)
+    return min(max(value, 0.0), 1.0)
+
+
+def _minimum_parallel_coverage_ratio(site: SiteSpec) -> float:
+    raw = site.optimization.get("maneuver_parallel_access_coverage_ratio", _minimum_coverage_ratio(site))
     try:
         value = float(raw)
     except (TypeError, ValueError):
@@ -628,6 +721,18 @@ def _minimum_angled_turn_coverage_ratio(site: SiteSpec) -> float:
         value = float(raw)
     except (TypeError, ValueError):
         value = _minimum_turn_coverage_ratio(site)
+    return min(max(value, 0.0), 1.0)
+
+
+def _minimum_parallel_turn_coverage_ratio(site: SiteSpec) -> float:
+    # Slightly looser than full-rectangle reverse-in proxies because the parallel
+    # buffer is a longitudinal strip that often clips the aisle endcaps.
+    default = min(_minimum_turn_coverage_ratio(site), 0.9)
+    raw = site.optimization.get("maneuver_parallel_turn_coverage_ratio", default)
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        value = default
     return min(max(value, 0.0), 1.0)
 
 
@@ -711,19 +816,76 @@ def _validate_vehicle_maneuver(
     if vehicle is None:
         return {**base, "valid": False, "reason": "design_vehicle_missing", "rule_id": "vehicle_input_v1"}
 
+    configuration = str(vehicle.configuration or "rigid").strip().lower() or "rigid"
+    if configuration not in {"rigid", "articulated"} and vehicle.trailer is None:
+        return {
+            **base,
+            "valid": False,
+            "reason": "vehicle_configuration_not_supported",
+            "rule_id": "vehicle_input_v1",
+            "vehicle_configuration": configuration,
+        }
+
     stall_spec = _stall_spec_for_stall(context.site, stall)
-    if stall_spec.family != "perpendicular" or not _angle_supported_for_perpendicular(stall_spec, stall):
+    family = stall_spec.family
+    is_t_end = stall.aisle_side == "end" or family == "t_end"
+    if is_articulated_vehicle(vehicle):
+        effective_articulated = replace(vehicle, max_reverse_distance=policy.maximum_reverse_distance)
+        if policy.require_swept_path:
+            return {
+                **base,
+                "valid": False,
+                "reason": "articulated_vehicle_template_not_supported",
+                "rule_id": "vehicle_template_dispatch_v1",
+                "stall_family": "t_end" if is_t_end else family,
+                "vehicle_class": "articulated",
+            }
+        return _articulated_analytic_vehicle_check(
+            context.site,
+            stall_spec,
+            effective_articulated,
+            base,
+            stall_family="t_end" if is_t_end else family,
+        )
+
+    supports_exact = is_t_end or (
+        (family == "perpendicular" and _angle_supported_for_perpendicular(stall_spec, stall))
+        or (family == "angled" and _angle_supported_for_angled(stall_spec, stall))
+        or family == "parallel"
+    )
+    supports_analytic = supports_exact or family == "parallel" or is_t_end
+    if not supports_analytic:
         return {
             **base,
             "valid": False,
             "reason": "vehicle_maneuver_template_not_supported_for_stall",
             "rule_id": "vehicle_template_dispatch_v1",
-            "stall_family": stall_spec.family,
+            "stall_family": "t_end" if is_t_end else family,
         }
 
     effective_vehicle = replace(vehicle, max_reverse_distance=policy.maximum_reverse_distance)
     if policy.require_swept_path:
-        return _exact_vehicle_check(context, stall, effective_vehicle, base)
+        if not supports_exact:
+            return {
+                **base,
+                "valid": False,
+                "reason": "vehicle_maneuver_template_not_supported_for_stall",
+                "rule_id": "vehicle_template_dispatch_v1",
+                "stall_family": "t_end" if is_t_end else family,
+            }
+        return _exact_vehicle_check(
+            context,
+            stall,
+            effective_vehicle,
+            base,
+            stall_family="t_end" if is_t_end else family,
+        )
+    if family == "parallel" and not is_t_end:
+        return _parallel_analytic_vehicle_check(context.site, stall_spec, effective_vehicle, base)
+    if is_t_end:
+        return _t_end_analytic_vehicle_check(context.site, stall_spec, effective_vehicle, base)
+    if family == "angled":
+        return _angled_analytic_vehicle_check(context.site, stall_spec, effective_vehicle, base)
     return _analytic_vehicle_check(context.site, stall_spec, effective_vehicle, base)
 
 
@@ -732,13 +894,20 @@ def _exact_vehicle_check(
     stall: ParkingStall,
     vehicle: VehicleSpec,
     base: dict[str, Any],
+    *,
+    stall_family: str,
 ) -> dict[str, Any]:
+    default_rule = {
+        "angled": "reverse_in_angled_bicycle_v1",
+        "parallel": "parallel_reverse_s_curve_bicycle_v1",
+        "t_end": "reverse_in_t_end_bicycle_v1",
+    }.get(stall_family, "reverse_in_90_bicycle_v1")
     if not stall.served_by_aisle_id or stall.served_by_aisle_id not in context.aisle_by_id:
         return {
             **base,
             "valid": False,
             "reason": "serving_aisle_missing",
-            "rule_id": "reverse_in_90_bicycle_v1",
+            "rule_id": default_rule,
         }
     sample_step = _positive_setting(context.site.optimization.get("vehicle_swept_sample_step"), 0.35)
     heading_step = _positive_setting(
@@ -746,16 +915,25 @@ def _exact_vehicle_check(
         2.0,
     )
     crossing = _centerline_crossing_rule(context.site)
+    serving = context.aisle_by_id[stall.served_by_aisle_id]
+    drivable = context.drivable
+    if stall_family == "t_end":
+        parts = [serving]
+        parent_id = context.parent_aisle_ids.get(stall.served_by_aisle_id)
+        if parent_id and parent_id in context.aisle_by_id:
+            parts.append(context.aisle_by_id[parent_id])
+        drivable = unary_union(parts)
     result = validate_stall_swept_path(
         vehicle,
         stall,
-        context.aisle_by_id[stall.served_by_aisle_id],
+        serving,
         boundary=context.swept_usable,
-        drivable_area=context.drivable,
+        drivable_area=drivable,
         centerline_crossing=crossing,
         require_explicit_track_width=True,
         sample_step=sample_step,
         max_heading_step_degrees=heading_step,
+        stall_family=stall_family,
     )
     conflicts = []
     if not result.envelope.is_empty:
@@ -767,12 +945,15 @@ def _exact_vehicle_check(
     include_trajectory = _boolean_setting(
         context.site.diagnostics.get("include_vehicle_trajectories", False)
     )
+    template_details = ((result.details.get("template") or {}).get("details") or {})
+    rule_id = str(template_details.get("template_version") or default_rule)
     return {
         **base,
         "valid": valid,
         "reason": reason,
-        "rule_id": "reverse_in_90_bicycle_v1",
+        "rule_id": rule_id,
         "status": "active_exact",
+        "stall_family": stall_family,
         "centerline_crossing": crossing,
         "sample_step": sample_step,
         "max_heading_step_degrees": heading_step,
@@ -831,6 +1012,176 @@ def _analytic_vehicle_check(
     }
 
 
+def _parallel_analytic_vehicle_check(
+    site: SiteSpec,
+    stall_spec: StallSpec,
+    vehicle: VehicleSpec,
+    base: dict[str, Any],
+) -> dict[str, Any]:
+    """Conservative parallel vehicle audit: fit + reverse bound, no swept path.
+
+    Parallel reverse distance is bounded by a simple multi-point-style estimate
+    (vehicle length + stall overhang allowance), not a reverse-in quarter arc.
+    """
+    radius = rear_axle_turning_radius(vehicle, require_explicit_track_width=True)
+    footprint = resolve_vehicle_overhangs(vehicle)
+    reason: str | None = None
+    if not radius.valid or radius.rear_axle_radius is None:
+        reason = radius.reason or "minimum_turning_radius_unresolved"
+    elif not footprint.valid:
+        reason = footprint.reason or "vehicle_footprint_invalid"
+    elif vehicle.width > stall_spec.width + 1e-9:
+        reason = "vehicle_too_wide_for_stall"
+    elif vehicle.length > stall_spec.length + 1e-9:
+        reason = "vehicle_too_long_for_stall"
+
+    # Parallel park typically reverse-aligns within roughly one vehicle length plus
+    # a short correction; keep a conservative multiple of vehicle length.
+    reverse_upper_bound = vehicle.length * 1.25 if vehicle.length > 0 else None
+    if (
+        reason is None
+        and vehicle.max_reverse_distance is not None
+        and reverse_upper_bound is not None
+        and reverse_upper_bound > vehicle.max_reverse_distance + 1e-9
+    ):
+        reason = "maximum_reverse_distance_exceeded_by_conservative_bound"
+    return {
+        **base,
+        "valid": reason is None,
+        "reason": reason,
+        "rule_id": "parallel_vehicle_analytic_v1",
+        "status": "active_conservative",
+        "stall_family": "parallel",
+        "turning_radius_resolution": radius.to_record(),
+        "footprint_resolution": footprint.to_record(),
+        "reverse_distance_upper_bound": reverse_upper_bound,
+        "reverse_model": "parallel_multi_point_proxy_length_bound",
+        "centerline_crossing": _centerline_crossing_rule(site),
+        "centerline_check": "requires_swept_path_check",
+        "path_template": "analytic fit and reverse bound; exact S-curve available when swept_path is requested",
+    }
+
+
+def _angled_analytic_vehicle_check(
+    site: SiteSpec,
+    stall_spec: StallSpec,
+    vehicle: VehicleSpec,
+    base: dict[str, Any],
+) -> dict[str, Any]:
+    """Conservative angled reverse-in bound: scaled arc plus stall length."""
+    record = _analytic_vehicle_check(site, stall_spec, vehicle, base)
+    angle = angled_module_angle(stall_spec.allowed_angles)
+    radius = record.get("turning_radius_resolution", {})
+    rear_radius = radius.get("rear_axle_radius") if isinstance(radius, dict) else None
+    arc = (
+        math.radians(angle) * float(rear_radius)
+        if angle is not None and isinstance(rear_radius, int | float)
+        else None
+    )
+    reverse_upper_bound = None if arc is None else arc + stall_spec.length
+    reason = record.get("reason")
+    if reason == "maximum_reverse_distance_exceeded_by_conservative_bound":
+        reason = None
+    if (
+        reason is None
+        and vehicle.max_reverse_distance is not None
+        and reverse_upper_bound is not None
+        and reverse_upper_bound > vehicle.max_reverse_distance + 1e-9
+    ):
+        reason = "maximum_reverse_distance_exceeded_by_conservative_bound"
+    return {
+        **record,
+        "valid": reason is None,
+        "reason": reason,
+        "rule_id": "angled_vehicle_analytic_v1",
+        "stall_family": "angled",
+        "stall_angle_degrees": angle,
+        "quarter_turn_arc_distance": arc,
+        "reverse_distance_upper_bound": reverse_upper_bound,
+        "path_template": "analytic reverse-in bound; exact template available when swept_path is requested",
+    }
+
+
+def _t_end_analytic_vehicle_check(
+    site: SiteSpec,
+    stall_spec: StallSpec,
+    vehicle: VehicleSpec,
+    base: dict[str, Any],
+) -> dict[str, Any]:
+    """T-end uses the same conservative reverse-in bound as perpendicular-90."""
+    record = _analytic_vehicle_check(site, stall_spec, vehicle, base)
+    return {
+        **record,
+        "rule_id": "t_end_vehicle_analytic_v1",
+        "stall_family": "t_end",
+        "path_template": "analytic reverse-in bound; exact template available when swept_path is requested",
+    }
+
+
+def _articulated_analytic_vehicle_check(
+    site: SiteSpec,
+    stall_spec: StallSpec,
+    vehicle: VehicleSpec,
+    base: dict[str, Any],
+    *,
+    stall_family: str,
+) -> dict[str, Any]:
+    """Conservative articulated audit: combination fit, off-tracking, reverse bound.
+
+    Exact bicycle stall templates are never used. This bound does not prove a
+    spatial tractor-trailer path.
+    """
+    geometry = resolve_articulated_geometry(vehicle)
+    radius = rear_axle_turning_radius(vehicle, require_explicit_track_width=True)
+    off_tracking = articulated_off_tracking(
+        vehicle,
+        aisle_width=site.aisle_width,
+        require_explicit_track_width=True,
+    )
+    reason: str | None = None
+    if not geometry.valid:
+        reason = geometry.reason or "articulated_vehicle_geometry_incomplete"
+    elif not radius.valid or radius.rear_axle_radius is None:
+        reason = radius.reason or "minimum_turning_radius_unresolved"
+    elif geometry.combination_width is not None and geometry.combination_width > stall_spec.width + 1e-9:
+        reason = "vehicle_too_wide_for_stall"
+    elif geometry.combination_length is not None and geometry.combination_length > stall_spec.length + 1e-9:
+        reason = "vehicle_too_long_for_stall"
+    elif not off_tracking.valid:
+        reason = off_tracking.reason or "articulated_off_tracking_unresolved"
+
+    reverse_upper_bound = None
+    if radius.rear_axle_radius is not None and geometry.trailer_length is not None:
+        reverse_upper_bound = math.pi * radius.rear_axle_radius / 2.0 + geometry.trailer_length
+    if (
+        reason is None
+        and vehicle.max_reverse_distance is not None
+        and reverse_upper_bound is not None
+        and reverse_upper_bound > vehicle.max_reverse_distance + 1e-9
+    ):
+        reason = "maximum_reverse_distance_exceeded_by_conservative_bound"
+    return {
+        **base,
+        "valid": reason is None,
+        "reason": reason,
+        "rule_id": "articulated_vehicle_analytic_v1",
+        "status": "active_conservative",
+        "stall_family": stall_family,
+        "vehicle_class": "articulated",
+        "turning_radius_resolution": radius.to_record(),
+        "articulated_geometry": geometry.to_record(),
+        "articulated_off_tracking": off_tracking.to_record(),
+        "reverse_distance_upper_bound": reverse_upper_bound,
+        "reverse_model": "tractor_quarter_arc_plus_trailer_length",
+        "centerline_crossing": _centerline_crossing_rule(site),
+        "centerline_check": "requires_swept_path_check",
+        "path_template": (
+            "conservative combination fit, steady-state trailer off-tracking, and tractor-arc-plus-trailer "
+            "reverse bound; no exact articulated swept-path template"
+        ),
+    }
+
+
 def _vehicle_validation_summary(
     site: SiteSpec,
     policy: VehicleCheckPolicy,
@@ -871,6 +1222,16 @@ def _vehicle_validation_summary(
 def _vehicle_spec_record(vehicle: VehicleSpec | None) -> dict[str, Any] | None:
     if vehicle is None:
         return None
+    trailer = None
+    if vehicle.trailer is not None:
+        trailer = {
+            "length": vehicle.trailer.length,
+            "width": vehicle.trailer.width,
+            "wheelbase": vehicle.trailer.wheelbase,
+            "track_width": vehicle.trailer.track_width,
+            "front_overhang": vehicle.trailer.front_overhang,
+            "rear_overhang": vehicle.trailer.rear_overhang,
+        }
     return {
         "id": vehicle.id,
         "length": vehicle.length,
@@ -883,6 +1244,10 @@ def _vehicle_spec_record(vehicle: VehicleSpec | None) -> dict[str, Any] | None:
         "rear_overhang": vehicle.rear_overhang,
         "swept_path_margin": vehicle.swept_path_margin,
         "max_reverse_distance": vehicle.max_reverse_distance,
+        "configuration": vehicle.configuration,
+        "hitch_offset": vehicle.hitch_offset,
+        "trailer": trailer,
+        "articulated": is_articulated_vehicle(vehicle),
     }
 
 

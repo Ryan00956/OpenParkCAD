@@ -35,7 +35,18 @@ def write_dxf(layout: LayoutResult, path: str | Path) -> None:
         if shape.label_point:
             _add_text(msp, shape.label_point, shape.id, shape.layer, height=0.45)
     for aisle in layout.aisles:
-        _add_polyline(msp, aisle.polygon, "AISLES")
+        layer = _aisle_layer(aisle.role)
+        entity = _add_polyline(msp, aisle.polygon, layer)
+        entity.set_xdata(
+            "OPENPARKCAD",
+            [
+                (1000, "parking_aisle"),
+                (1000, aisle.id),
+                (1000, aisle.role),
+                (1000, aisle.parent_aisle_id or ""),
+            ],
+        )
+        _add_text(msp, _centroid(aisle.polygon), aisle.id, "LABELS", height=0.4)
     for stall in layout.stalls:
         entity = _add_polyline(msp, stall.polygon, "STALLS")
         entity.set_xdata(
@@ -51,6 +62,20 @@ def write_dxf(layout: LayoutResult, path: str | Path) -> None:
     doc.saveas(target)
 
 
+def _aisle_layer(role: str) -> str:
+    """Map aisle roles onto dedicated DXF layers (plus legacy AISLES fallback)."""
+    mapping = {
+        "main": "AISLES_MAIN",
+        "turnaround": "AISLES_TURNAROUND",
+        "branch": "AISLES_BRANCH",
+        "connector": "AISLES_CONNECTOR",
+        "jog": "AISLES_JOG",
+        "exit": "AISLES_EXIT",
+        "passing_bay": "AISLES_PASSING_BAY",
+    }
+    return mapping.get(role, "AISLES")
+
+
 def _ensure_layers(doc) -> None:
     layers = {
         "BOUNDARY": 7,
@@ -60,6 +85,13 @@ def _ensure_layers(doc) -> None:
         "PEDESTRIAN": 94,
         "FIRE_LANES": 10,
         "AISLES": 8,
+        "AISLES_MAIN": 8,
+        "AISLES_TURNAROUND": 94,
+        "AISLES_BRANCH": 140,
+        "AISLES_CONNECTOR": 40,
+        "AISLES_JOG": 200,
+        "AISLES_EXIT": 3,
+        "AISLES_PASSING_BAY": 30,
         "STALLS": 5,
         "LABELS": 3,
     }

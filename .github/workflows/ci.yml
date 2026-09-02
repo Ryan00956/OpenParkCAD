@@ -63,6 +63,6 @@ jobs:
           assert report["report_contract_version"] == "openparkcad-report-0.3"
           assert report["engineering_validation"]["result_scope"] == "official_layout"
           assert report["engineering_validation"]["valid"] is True
-          assert report["operational_quality"]["version"] == "phase5q-1"
+          assert report["operational_quality"]["version"] == "phase5r-1"
           assert report["traffic_graph"]["validation"]["valid"] is True
           PY

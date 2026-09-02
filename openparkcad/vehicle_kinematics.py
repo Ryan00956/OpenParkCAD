@@ -12,7 +12,7 @@ import math
 from dataclasses import dataclass, field
 from typing import Any
 
-from openparkcad.models import VehicleSpec
+from openparkcad.models import VehicleSpec, is_articulated_vehicle
 
 _EPSILON = 1e-9
 
@@ -337,6 +337,375 @@ def rear_axle_turning_radius(
         formula="R_rear = sqrt(R_outer^2 - wheelbase^2) - track_width/2",
         track_width=track_width,
         assumptions=assumptions,
+    )
+
+
+@dataclass(frozen=True)
+class ArticulatedGeometryResolution:
+    """Auditable tractor/trailer lengths used by the conservative analytic."""
+
+    valid: bool
+    reason: str | None
+    configuration: str
+    tractor_length: float | None
+    tractor_width: float | None
+    trailer_length: float | None
+    trailer_width: float | None
+    trailer_wheelbase: float | None
+    hitch_offset: float | None
+    combination_length: float | None
+    combination_width: float | None
+    formula: str | None = None
+    assumptions: tuple[str, ...] = ()
+
+    def to_record(self) -> dict[str, Any]:
+        return {
+            "valid": self.valid,
+            "reason": self.reason,
+            "configuration": self.configuration,
+            "tractor_length": self.tractor_length,
+            "tractor_width": self.tractor_width,
+            "trailer_length": self.trailer_length,
+            "trailer_width": self.trailer_width,
+            "trailer_wheelbase": self.trailer_wheelbase,
+            "hitch_offset": self.hitch_offset,
+            "combination_length": self.combination_length,
+            "combination_width": self.combination_width,
+            "formula": self.formula,
+            "assumptions": list(self.assumptions),
+        }
+
+
+@dataclass(frozen=True)
+class ArticulatedOffTrackingResolution:
+    """Steady-state circular trailer off-tracking versus a declared aisle width."""
+
+    valid: bool
+    reason: str | None
+    tractor_rear_axle_radius: float | None
+    hitch_radius: float | None
+    trailer_axle_radius: float | None
+    off_tracking: float | None
+    required_aisle_width: float | None
+    declared_aisle_width: float | None
+    formula: str | None = None
+    assumptions: tuple[str, ...] = ()
+
+    def to_record(self) -> dict[str, Any]:
+        return {
+            "valid": self.valid,
+            "reason": self.reason,
+            "tractor_rear_axle_radius": self.tractor_rear_axle_radius,
+            "hitch_radius": self.hitch_radius,
+            "trailer_axle_radius": self.trailer_axle_radius,
+            "off_tracking": self.off_tracking,
+            "required_aisle_width": self.required_aisle_width,
+            "declared_aisle_width": self.declared_aisle_width,
+            "formula": self.formula,
+            "assumptions": list(self.assumptions),
+        }
+
+
+def _finite_positive(value: float | None) -> bool:
+    return value is not None and math.isfinite(value) and value > 0.0
+
+
+def _body_overhangs(
+    length: float,
+    wheelbase: float | None,
+    front_overhang: float | None,
+    rear_overhang: float | None,
+) -> tuple[float | None, float | None, tuple[str, ...]]:
+    if wheelbase is None or not math.isfinite(wheelbase) or wheelbase <= 0.0:
+        return None, None, ()
+    remaining = length - wheelbase
+    if remaining < -_EPSILON:
+        return None, None, ()
+    assumptions: list[str] = []
+    front = front_overhang
+    rear = rear_overhang
+    if front is None and rear is None:
+        front = remaining / 2.0
+        rear = remaining / 2.0
+        assumptions.append("front_and_rear_overhang_split_evenly")
+    elif front is None:
+        front = remaining - float(rear)
+        assumptions.append("front_overhang_derived_from_length")
+    elif rear is None:
+        rear = remaining - float(front)
+        assumptions.append("rear_overhang_derived_from_length")
+    if front is None or rear is None or not math.isfinite(front) or not math.isfinite(rear):
+        return None, None, ()
+    if front < -_EPSILON or rear < -_EPSILON:
+        return None, None, ()
+    if abs((front + rear) - remaining) > 1e-6:
+        return None, None, ()
+    return front, rear, tuple(assumptions)
+
+
+def resolve_articulated_geometry(vehicle: VehicleSpec) -> ArticulatedGeometryResolution:
+    """Resolve combination length/width from tractor, hitch, and trailer inputs."""
+
+    configuration = str(vehicle.configuration or "rigid").strip().lower() or "rigid"
+    if not is_articulated_vehicle(vehicle):
+        return ArticulatedGeometryResolution(
+            False,
+            "vehicle_is_not_articulated",
+            configuration,
+            vehicle.length,
+            vehicle.width,
+            None,
+            None,
+            None,
+            vehicle.hitch_offset,
+            None,
+            None,
+        )
+    trailer = vehicle.trailer
+    if trailer is None:
+        return ArticulatedGeometryResolution(
+            False,
+            "articulated_trailer_missing",
+            configuration,
+            vehicle.length,
+            vehicle.width,
+            None,
+            None,
+            None,
+            vehicle.hitch_offset,
+            None,
+            None,
+        )
+    if not _finite_positive(vehicle.length) or not _finite_positive(vehicle.width):
+        return ArticulatedGeometryResolution(
+            False,
+            "invalid_vehicle_dimensions",
+            configuration,
+            vehicle.length,
+            vehicle.width,
+            trailer.length,
+            trailer.width,
+            trailer.wheelbase,
+            vehicle.hitch_offset,
+            None,
+            None,
+        )
+    if not _finite_positive(trailer.length) or not _finite_positive(trailer.width):
+        return ArticulatedGeometryResolution(
+            False,
+            "invalid_trailer_dimensions",
+            configuration,
+            vehicle.length,
+            vehicle.width,
+            trailer.length,
+            trailer.width,
+            trailer.wheelbase,
+            vehicle.hitch_offset,
+            None,
+            None,
+        )
+    if trailer.wheelbase is not None and (
+        not math.isfinite(trailer.wheelbase)
+        or trailer.wheelbase <= 0.0
+        or trailer.wheelbase > trailer.length + _EPSILON
+    ):
+        return ArticulatedGeometryResolution(
+            False,
+            "articulated_trailer_wheelbase_invalid",
+            configuration,
+            vehicle.length,
+            vehicle.width,
+            trailer.length,
+            trailer.width,
+            trailer.wheelbase,
+            vehicle.hitch_offset,
+            None,
+            None,
+        )
+
+    assumptions: list[str] = []
+    hitch_offset = vehicle.hitch_offset
+    if hitch_offset is None:
+        hitch_offset = 0.0
+        assumptions.append("hitch_offset_assumed_zero")
+    elif not math.isfinite(hitch_offset):
+        return ArticulatedGeometryResolution(
+            False,
+            "invalid_hitch_offset",
+            configuration,
+            vehicle.length,
+            vehicle.width,
+            trailer.length,
+            trailer.width,
+            trailer.wheelbase,
+            vehicle.hitch_offset,
+            None,
+            None,
+        )
+
+    combination_width = max(vehicle.width, trailer.width)
+    tractor_front, _tractor_rear, tractor_assumptions = _body_overhangs(
+        vehicle.length,
+        vehicle.wheelbase,
+        vehicle.front_overhang,
+        vehicle.rear_overhang,
+    )
+    assumptions.extend(f"tractor_{item}" for item in tractor_assumptions)
+    trailer_front, trailer_rear, trailer_assumptions = _body_overhangs(
+        trailer.length,
+        trailer.wheelbase,
+        trailer.front_overhang,
+        trailer.rear_overhang,
+    )
+    assumptions.extend(f"trailer_{item}" for item in trailer_assumptions)
+
+    combination_length: float | None = None
+    formula: str | None = None
+    if (
+        tractor_front is not None
+        and vehicle.wheelbase is not None
+        and math.isfinite(vehicle.wheelbase)
+        and vehicle.wheelbase > 0.0
+    ):
+        tractor_front_to_hitch = tractor_front + vehicle.wheelbase + hitch_offset
+        trailer_hitch_to_rear: float | None = None
+        if trailer_front is not None:
+            trailer_hitch_to_rear = trailer.length - trailer_front
+        elif trailer.wheelbase is not None and trailer_rear is not None:
+            trailer_hitch_to_rear = trailer.wheelbase + trailer_rear
+        elif trailer.wheelbase is not None:
+            trailer_hitch_to_rear = trailer.length
+            assumptions.append("trailer_kingpin_assumed_at_front")
+        if trailer_hitch_to_rear is not None and tractor_front_to_hitch > 0.0 and trailer_hitch_to_rear > 0.0:
+            combination_length = tractor_front_to_hitch + trailer_hitch_to_rear
+            formula = (
+                "L_combo = (tractor_front_overhang + tractor_wheelbase + hitch_offset) "
+                "+ (trailer_length - trailer_front_overhang)"
+            )
+    if combination_length is None:
+        combination_length = vehicle.length + trailer.length
+        formula = "L_combo = tractor_length + trailer_length"
+        assumptions.append("combination_length_sum_without_overlap")
+
+    return ArticulatedGeometryResolution(
+        True,
+        None,
+        configuration,
+        vehicle.length,
+        vehicle.width,
+        trailer.length,
+        trailer.width,
+        trailer.wheelbase,
+        hitch_offset,
+        combination_length,
+        combination_width,
+        formula=formula,
+        assumptions=tuple(assumptions),
+    )
+
+
+def articulated_off_tracking(
+    vehicle: VehicleSpec,
+    *,
+    aisle_width: float | None,
+    require_explicit_track_width: bool = True,
+) -> ArticulatedOffTrackingResolution:
+    """Steady-state inner trailer off-tracking for a circular tractor path.
+
+    ``R_hitch = sqrt(R_rear^2 + hitch_offset^2)``
+    ``R_trailer = sqrt(R_hitch^2 - trailer_wheelbase^2)``
+    ``off_tracking = R_rear - R_trailer``
+
+    Required aisle width is ``combination_width + off_tracking + 2 * swept_path_margin``.
+    This is a fail-closed bound, not a spatial swept-path proof.
+    """
+
+    geometry = resolve_articulated_geometry(vehicle)
+    if not geometry.valid:
+        return ArticulatedOffTrackingResolution(
+            False,
+            geometry.reason,
+            None,
+            None,
+            None,
+            None,
+            None,
+            aisle_width,
+            assumptions=geometry.assumptions,
+        )
+    if geometry.trailer_wheelbase is None:
+        return ArticulatedOffTrackingResolution(
+            False,
+            "articulated_trailer_wheelbase_missing",
+            None,
+            None,
+            None,
+            None,
+            None,
+            aisle_width,
+            assumptions=geometry.assumptions,
+        )
+    radius = rear_axle_turning_radius(vehicle, require_explicit_track_width=require_explicit_track_width)
+    if not radius.valid or radius.rear_axle_radius is None:
+        return ArticulatedOffTrackingResolution(
+            False,
+            radius.reason or "minimum_turning_radius_unresolved",
+            radius.rear_axle_radius,
+            None,
+            None,
+            None,
+            None,
+            aisle_width,
+            assumptions=geometry.assumptions + radius.assumptions,
+        )
+    hitch_offset = geometry.hitch_offset if geometry.hitch_offset is not None else 0.0
+    hitch_radius = math.sqrt(radius.rear_axle_radius * radius.rear_axle_radius + hitch_offset * hitch_offset)
+    trailer_span = geometry.trailer_wheelbase * geometry.trailer_wheelbase
+    remaining = hitch_radius * hitch_radius - trailer_span
+    if remaining <= _EPSILON:
+        return ArticulatedOffTrackingResolution(
+            False,
+            "articulated_turn_tighter_than_trailer_wheelbase",
+            radius.rear_axle_radius,
+            hitch_radius,
+            None,
+            None,
+            None,
+            aisle_width,
+            formula="R_trailer = sqrt(R_hitch^2 - trailer_wheelbase^2)",
+            assumptions=geometry.assumptions,
+        )
+    trailer_axle_radius = math.sqrt(remaining)
+    off_tracking = radius.rear_axle_radius - trailer_axle_radius
+    if off_tracking < -_EPSILON:
+        off_tracking = 0.0
+    margin = vehicle.swept_path_margin if math.isfinite(vehicle.swept_path_margin) else 0.0
+    if margin < 0.0:
+        margin = 0.0
+    combination_width = geometry.combination_width or 0.0
+    required = combination_width + off_tracking + 2.0 * margin
+    formula = (
+        "R_hitch = sqrt(R_rear^2 + hitch_offset^2); "
+        "R_trailer = sqrt(R_hitch^2 - trailer_wheelbase^2); "
+        "off_tracking = R_rear - R_trailer; "
+        "required_aisle_width = combination_width + off_tracking + 2*swept_path_margin"
+    )
+    reason: str | None = None
+    if aisle_width is None or not math.isfinite(aisle_width) or aisle_width <= 0.0:
+        reason = "articulated_aisle_width_missing_or_invalid"
+    elif required > aisle_width + _EPSILON:
+        reason = "aisle_too_narrow_for_articulated_off_tracking"
+    return ArticulatedOffTrackingResolution(
+        reason is None,
+        reason,
+        radius.rear_axle_radius,
+        hitch_radius,
+        trailer_axle_radius,
+        off_tracking,
+        required,
+        aisle_width,
+        formula=formula,
+        assumptions=geometry.assumptions,
     )
 
 

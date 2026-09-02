@@ -121,6 +121,29 @@ def _declared_rule_records(
                     }
                 )
 
+    usability = site_constraints.get("route_usability", {})
+    if isinstance(usability, dict):
+        for key, rule_id, source in (
+            ("accessible_route", "route.accessible_usability", "pedestrian_and_emergency"),
+            ("accessible_route_continuity", "route.accessible_continuity", "pedestrian_and_emergency"),
+            ("accessible_route_dimensions", "route.accessible_dimensions", "pedestrian_and_emergency"),
+            ("emergency_access", "route.emergency_access_connectivity", "pedestrian_and_emergency"),
+            ("ev_charger", "equipment.ev_charger_usability", "site_features"),
+        ):
+            block = usability.get(key, {})
+            if not isinstance(block, dict) or not block.get("requested"):
+                continue
+            active.append(
+                {
+                    "id": rule_id,
+                    "kind": "route_usability",
+                    "source": source,
+                    "authority": "project_policy",
+                    "priority": "hard",
+                    "status": "failed" if block.get("status") == "active_failed" else "active",
+                }
+            )
+
     return _sorted_rule_records(active), _sorted_rule_records(advisory)
 
 

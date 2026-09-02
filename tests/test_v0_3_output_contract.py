@@ -61,6 +61,31 @@ def test_dxf_and_svg_preserve_canonical_stall_type_identity(tmp_path: Path) -> N
     assert f'data-stall-type-id="{layout.stalls[0].stall_type_id or layout.site.stall.id}"' in svg
 
 
+def test_dxf_aisles_use_role_layers_and_xdata(tmp_path: Path) -> None:
+    data = json.loads(Path("examples/dogleg_obstacle_site.json").read_text(encoding="utf-8"))
+    layout = generate_layout(site_from_dict(data))
+    dxf_path = tmp_path / "dogleg.dxf"
+    write_dxf(layout, dxf_path)
+
+    document = ezdxf.readfile(dxf_path)
+    roles = {aisle.role for aisle in layout.aisles}
+    if "jog" in roles:
+        jog_entities = list(document.modelspace().query('LWPOLYLINE[layer=="AISLES_JOG"]'))
+        assert jog_entities
+        xdata = [tag.value for tag in jog_entities[0].get_xdata("OPENPARKCAD")]
+        assert xdata[0] == "parking_aisle"
+        assert xdata[2] == "jog"
+    main_entities = list(document.modelspace().query('LWPOLYLINE[layer=="AISLES_MAIN"]'))
+    assert main_entities
+
+    svg_path = tmp_path / "dogleg.svg"
+    write_svg(layout, svg_path)
+    svg = svg_path.read_text(encoding="utf-8")
+    assert "A-MAIN" in svg
+    if any(aisle.role == "jog" for aisle in layout.aisles):
+        assert "A-JOG" in svg or "A-JOG-001" in svg
+
+
 def test_cli_exposes_package_version(capsys) -> None:
     with pytest.raises(SystemExit) as exc_info:
         main(["--version"])

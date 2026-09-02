@@ -81,6 +81,19 @@
     ],
     "fire_lanes": [
       {
+        "id": "south-fire-approach",
+        "type": "fire_lane",
+        "geometry": {
+          "type": "polyline_buffer",
+          "points": [[20, 0.15], [28, 0.15]],
+          "width": 0.3
+        },
+        "parking_allowed": false,
+        "vehicle_allowed": true,
+        "authority": "project_policy",
+        "priority": "hard"
+      },
+      {
         "id": "east-fire-edge",
         "type": "fire_lane",
         "geometry": {

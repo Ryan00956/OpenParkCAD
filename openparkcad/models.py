@@ -45,6 +45,16 @@ class EntranceSpec:
 
 
 @dataclass(frozen=True)
+class TrailerSpec:
+    length: float
+    width: float
+    wheelbase: float | None = None
+    track_width: float | None = None
+    front_overhang: float | None = None
+    rear_overhang: float | None = None
+
+
+@dataclass(frozen=True)
 class VehicleSpec:
     id: str = "passenger-car"
     length: float = 4.8
@@ -57,6 +67,17 @@ class VehicleSpec:
     rear_overhang: float | None = None
     swept_path_margin: float = 0.0
     max_reverse_distance: float | None = None
+    configuration: str = "rigid"
+    hitch_offset: float | None = None
+    trailer: TrailerSpec | None = None
+
+
+def is_articulated_vehicle(vehicle: VehicleSpec | None) -> bool:
+    if vehicle is None:
+        return False
+    if vehicle.trailer is not None:
+        return True
+    return str(vehicle.configuration).strip().lower() == "articulated"
 
 
 @dataclass(frozen=True)
@@ -121,6 +142,7 @@ class ParkingAisle:
     connected_to_entrance_id: str | None = None
     parent_aisle_id: str | None = None
     connected_aisle_ids: tuple[str, ...] = ()
+    directionality: str = "two_way"
 
 
 @dataclass(frozen=True)
@@ -437,6 +459,9 @@ def _entrance(raw: Any, index: int) -> EntranceSpec:
 
 def _vehicle(raw: Any) -> VehicleSpec:
     data = _dict(raw, "vehicles.design_vehicle")
+    trailer_raw = data.get("trailer")
+    trailer = _trailer(trailer_raw) if trailer_raw else None
+    default_configuration = "articulated" if trailer is not None else "rigid"
     return VehicleSpec(
         id=str(data.get("id", "passenger-car")),
         length=float(data.get("length", 4.8)),
@@ -449,4 +474,27 @@ def _vehicle(raw: Any) -> VehicleSpec:
         rear_overhang=float(data["rear_overhang"]) if "rear_overhang" in data else None,
         swept_path_margin=float(data.get("swept_path_margin", 0.0)),
         max_reverse_distance=float(data["max_reverse_distance"]) if "max_reverse_distance" in data else None,
+        configuration=str(data.get("configuration", default_configuration)),
+        hitch_offset=_optional_float(data, "hitch_offset"),
+        trailer=trailer,
     )
+
+
+def _trailer(raw: Any) -> TrailerSpec:
+    data = _dict(raw, "vehicles.design_vehicle.trailer")
+    if "length" not in data or "width" not in data:
+        raise ValueError("vehicles.design_vehicle.trailer requires length and width")
+    return TrailerSpec(
+        length=float(data["length"]),
+        width=float(data["width"]),
+        wheelbase=_optional_float(data, "wheelbase"),
+        track_width=_optional_float(data, "track_width"),
+        front_overhang=_optional_float(data, "front_overhang"),
+        rear_overhang=_optional_float(data, "rear_overhang"),
+    )
+
+
+def _optional_float(data: dict[str, Any], key: str) -> float | None:
+    if key not in data or data[key] is None:
+        return None
+    return float(data[key])

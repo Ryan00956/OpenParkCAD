@@ -48,8 +48,9 @@ def test_exact_vehicle_diagnostics_state_scope_and_fail_closed_boundary():
         "invalid_stall_count": 0,
         "report_version": "v0.3-vehicle-maneuver-1",
         "scope": (
-            "perpendicular-90 reverse-in template with exact constant-curvature pose integration and a "
-            "conservative sampled body envelope"
+            "perpendicular-90 reverse-in, acute-angled reverse-in, parallel reverse S-curve, and T-end "
+            "reverse-in templates with exact constant-curvature pose integration and a conservative sampled "
+            "body envelope"
         ),
     }
     assert diagnostics["field_support"]["constraints.turning_radius"] == "active_exact"

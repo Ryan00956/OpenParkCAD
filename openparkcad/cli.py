@@ -96,6 +96,10 @@ def _write_report(layout, path: str | Path) -> None:
         "aisle_count": len(layout.aisles),
         "generation_mode": layout.generation_mode,
         "main_entrance_id": layout.main_entrance_id,
+        "exit_entrance_id": next(
+            (aisle.connected_to_entrance_id for aisle in layout.aisles if aisle.role == "exit" and aisle.connected_to_entrance_id),
+            None,
+        ),
         "selected_angle_degrees": layout.selected_angle_degrees,
         "selected_heading_degrees": layout.selected_heading_degrees,
         "selected_heading_delta_degrees": layout.selected_heading_delta_degrees,
@@ -125,12 +129,18 @@ def _write_report(layout, path: str | Path) -> None:
             {
                 "id": aisle.id,
                 "role": aisle.role,
+                "directionality": aisle.directionality,
                 "connected_to_entrance_id": aisle.connected_to_entrance_id,
                 "parent_aisle_id": aisle.parent_aisle_id,
                 "connected_aisle_ids": list(aisle.connected_aisle_ids),
             }
             for aisle in layout.aisles
         ],
+        "aisle_directionality": (
+            layout.graph_validation.get("aisle_directionality")
+            if isinstance(layout.graph_validation, dict)
+            else None
+        ),
         "stalls": [
             {
                 "id": stall.id,

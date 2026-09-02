@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from re import split
 from typing import Any, Literal
@@ -11,13 +12,29 @@ from shapely.geometry import box
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 
-from openparkcad.models import LayoutResult, SiteAreaSpec, SiteSpec, StallSpec
+from openparkcad.models import EntranceSpec, LayoutResult, ParkingStall, SiteAreaSpec, SiteSpec, StallSpec
 
 ConstraintPurpose = Literal["all", "stall", "aisle", "swept_path"]
 _CONCRETE_PURPOSES = frozenset({"stall", "aisle", "swept_path"})
 _ADVISORY_PRIORITIES = frozenset({"advisory", "draw_only", "future", "soft"})
 _AUTHORITY_TIERS = ("advisory", "project_policy", "jurisdictional")
 _AREA_TOLERANCE = 1e-6
+DEFAULT_ACCESSIBLE_ROUTE_TOUCH_TOLERANCE = 1.5
+DEFAULT_EMERGENCY_ROUTE_TOUCH_TOLERANCE = 1.0
+DEFAULT_EV_CHARGER_TOUCH_TOLERANCE = 2.0
+_EMERGENCY_ROUTE_SOURCES = frozenset({"fire_lane", "access_route", "emergency_access_route"})
+_CHARGER_KINDS = frozenset({"charging_post", "ev_charger", "charger"})
+_RESERVED_ACCESSIBLE_CONNECT_TOKENS = frozenset(
+    {
+        "accessible-stalls",
+        "accessible_stalls",
+        "accessible-stall",
+        "accessible_stall",
+        "stalls",
+        "stall",
+        "parking",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -122,6 +139,8 @@ def validate_site_constraints(layout: LayoutResult) -> dict[str, Any]:
 
     quota_report = validate_parking_quotas(layout)
     errors.extend(str(item) for item in quota_report["errors"])
+    usability_report = validate_route_usability(layout)
+    errors.extend(str(item) for item in usability_report["errors"])
     active_constraints: list[ConstraintGeometry] = []
     all_constraints: list[ConstraintGeometry] = []
     if definition_report["valid"]:
@@ -152,6 +171,7 @@ def validate_site_constraints(layout: LayoutResult) -> dict[str, Any]:
             "aisles": aisle_conflicts,
         },
         "quota": quota_report,
+        "route_usability": usability_report,
     }
 
 
@@ -268,6 +288,718 @@ def validate_parking_quotas(layout: LayoutResult) -> dict[str, Any]:
         "errors": errors,
         "assignment_mode": "count_explicit_stall_type_classifications",
     }
+
+
+DEFAULT_ACCESSIBLE_CONTACT_WEIGHT = 100.0
+DEFAULT_EV_CONTACT_WEIGHT = 100.0
+
+
+def classified_contact_adjustment(
+    site: SiteSpec,
+    stall_type_id: str | None,
+    stall_polygons: list,
+) -> tuple[float, str | None]:
+    """Per-stall shadow bonus, or a rejection reason if classified contact fails."""
+    spec = _stall_specs_by_id(site).get(stall_type_id or site.stall.id)
+    capabilities = stall_type_capabilities(spec)
+    extra = 0.0
+    if "accessible" in capabilities and int(site.parking_quotas.get("accessible_min", 0) or 0) > 0:
+        routes = _hard_routes(site, {"accessible_route"})
+        if routes:
+            tolerance, error = _constraint_tolerance(
+                site, "accessible_route_touch_tolerance", DEFAULT_ACCESSIBLE_ROUTE_TOUCH_TOLERANCE
+            )
+            if error or tolerance is None:
+                return 0.0, error
+            if not _polygons_all_reach(stall_polygons, routes, tolerance):
+                return 0.0, "module_does_not_reach_accessible_route"
+            extra += _contact_weight(site, "accessible_contact", DEFAULT_ACCESSIBLE_CONTACT_WEIGHT)
+    if "ev" in capabilities and int(site.parking_quotas.get("ev_min", 0) or 0) > 0:
+        chargers = _hard_charger_features(site)
+        if chargers:
+            tolerance, error = _constraint_tolerance(
+                site, "ev_charger_touch_tolerance", DEFAULT_EV_CHARGER_TOUCH_TOLERANCE
+            )
+            if error or tolerance is None:
+                return 0.0, error
+            if not _polygons_all_reach(stall_polygons, chargers, tolerance):
+                return 0.0, "module_does_not_reach_charger"
+            extra += _contact_weight(site, "ev_contact", DEFAULT_EV_CONTACT_WEIGHT)
+    return extra, None
+
+
+def _contact_weight(site: SiteSpec, key: str, default: float) -> float:
+    overrides = site.optimization.get("weights", {})
+    if not isinstance(overrides, dict) or key not in overrides:
+        return default
+    try:
+        return float(overrides[key])
+    except (TypeError, ValueError):
+        return default
+
+
+def _polygons_all_reach(polygons: list, targets: list[ConstraintGeometry], tolerance: float) -> bool:
+    if not polygons:
+        return False
+    for polygon in polygons:
+        geometry = ShapelyPolygon(polygon) if not hasattr(polygon, "geom_type") else polygon
+        if not _geometry_reaches_routes(geometry, targets, tolerance):
+            return False
+    return True
+
+
+def apply_contact_filter(layout: LayoutResult) -> LayoutResult:
+    """Drop classified accessible/EV stalls that cannot reach required contact geometry.
+
+    Runs on official and preview layouts before site-constraint validation so
+    quota and usability see only reachable stalls. Not a mix-type placer.
+    """
+    drop_ids: list[str] = []
+    specs = _stall_specs_by_id(layout.site)
+    accessible_needed = int(layout.site.parking_quotas.get("accessible_min", 0) or 0) > 0
+    ev_needed = int(layout.site.parking_quotas.get("ev_min", 0) or 0) > 0
+    routes = _hard_routes(layout.site, {"accessible_route"}) if accessible_needed else []
+    chargers = _hard_charger_features(layout.site) if ev_needed else []
+    acc_tol, acc_err = _constraint_tolerance(
+        layout.site, "accessible_route_touch_tolerance", DEFAULT_ACCESSIBLE_ROUTE_TOUCH_TOLERANCE
+    )
+    ev_tol, ev_err = _constraint_tolerance(
+        layout.site, "ev_charger_touch_tolerance", DEFAULT_EV_CHARGER_TOUCH_TOLERANCE
+    )
+    if acc_err or ev_err:
+        return layout
+    for stall in layout.stalls:
+        spec = specs.get(stall.stall_type_id or layout.site.stall.id)
+        capabilities = stall_type_capabilities(spec)
+        if accessible_needed and routes and "accessible" in capabilities:
+            if acc_tol is None or not _geometry_reaches_routes(ShapelyPolygon(stall.polygon), routes, acc_tol):
+                drop_ids.append(stall.id)
+                continue
+        if ev_needed and chargers and "ev" in capabilities:
+            if ev_tol is None or not _geometry_reaches_routes(ShapelyPolygon(stall.polygon), chargers, ev_tol):
+                drop_ids.append(stall.id)
+    if not drop_ids:
+        return layout
+    drop_set = set(drop_ids)
+    kept = [stall for stall in layout.stalls if stall.id not in drop_set]
+    object.__setattr__(layout, "stalls", _renumber_contact_stalls(kept))
+    return layout
+
+
+def _renumber_contact_stalls(stalls: list[ParkingStall]) -> list[ParkingStall]:
+    return [
+        ParkingStall(
+            id=f"P-{index:03d}",
+            polygon=stall.polygon,
+            angle_degrees=stall.angle_degrees,
+            served_by_aisle_id=stall.served_by_aisle_id,
+            aisle_side=stall.aisle_side,
+            stall_type_id=stall.stall_type_id,
+        )
+        for index, stall in enumerate(stalls, start=1)
+    ]
+
+
+def validate_route_usability(layout: LayoutResult) -> dict[str, Any]:
+    """Geometric stall-to-route and route-to-entrance contact. Not slope/width/ADA."""
+
+    accessible = _accessible_route_usability(layout)
+    continuity = _accessible_route_continuity(layout, accessible)
+    dimensions = _accessible_route_dimensions(layout.site)
+    emergency = _emergency_access_connectivity(layout)
+    ev_charger = _ev_charger_usability(layout)
+    errors = (
+        list(accessible.get("errors", []))
+        + list(continuity.get("errors", []))
+        + list(dimensions.get("errors", []))
+        + list(emergency.get("errors", []))
+        + list(ev_charger.get("errors", []))
+    )
+    return {
+        "version": "v0.4-route-usability-4",
+        "valid": not errors,
+        "errors": errors,
+        "accessible_route": accessible,
+        "accessible_route_continuity": continuity,
+        "accessible_route_dimensions": dimensions,
+        "emergency_access": emergency,
+        "ev_charger": ev_charger,
+        "scope": (
+            "project-policy geometric contact between classified accessible stalls and hard "
+            "accessible routes, connected accessible-route pieces and declared connects "
+            "destinations, polyline_buffer min_width versus declared width, hard fire/access "
+            "routes and entrance gates, and classified EV stalls and placed charging posts; "
+            "declared max_slope fail-closes because elevation is not modeled. Not ADA, "
+            "apparatus, or electrical certification"
+        ),
+    }
+
+
+def _accessible_route_usability(layout: LayoutResult) -> dict[str, Any]:
+    requested = int(layout.site.parking_quotas.get("accessible_min", 0)) > 0
+    tolerance, config_error = _constraint_tolerance(
+        layout.site,
+        "accessible_route_touch_tolerance",
+        DEFAULT_ACCESSIBLE_ROUTE_TOUCH_TOLERANCE,
+    )
+    quota = validate_parking_quotas(layout)
+    stall_ids = list(quota.get("matching_stall_ids", {}).get("accessible", []))
+    routes = _hard_routes(layout.site, {"accessible_route"})
+    base = {
+        "requested": requested,
+        "touch_tolerance": tolerance,
+        "route_ids": [item.id for item in routes],
+        "checked_stall_ids": stall_ids,
+        "reachable_stall_ids": [],
+        "unreachable_stall_ids": [],
+        "errors": [],
+        "reason": None,
+    }
+    if config_error:
+        return {
+            **base,
+            "status": "active_failed",
+            "reason": config_error,
+            "errors": [config_error],
+        }
+    if not requested:
+        return {**base, "status": "not_requested"}
+    if not routes:
+        return {
+            **base,
+            "status": "active_failed",
+            "reason": "accessible_route_geometry_missing",
+            "errors": [],
+        }
+    stall_by_id = {stall.id: stall for stall in layout.stalls}
+    reachable: list[str] = []
+    unreachable: list[str] = []
+    assert tolerance is not None
+    for stall_id in stall_ids:
+        stall = stall_by_id.get(stall_id)
+        if stall is None or not _geometry_reaches_routes(ShapelyPolygon(stall.polygon), routes, tolerance):
+            unreachable.append(stall_id)
+        else:
+            reachable.append(stall_id)
+    errors: list[str] = []
+    reason = None
+    if unreachable:
+        reason = "accessible_stall_does_not_reach_accessible_route"
+        errors.append(
+            "accessible stalls do not reach a hard accessible route within "
+            f"{tolerance} m: {', '.join(unreachable)}"
+        )
+    return {
+        **base,
+        "status": "active_failed" if errors else "active",
+        "reachable_stall_ids": reachable,
+        "unreachable_stall_ids": unreachable,
+        "reason": reason,
+        "errors": errors,
+    }
+
+
+def _accessible_route_continuity(
+    layout: LayoutResult,
+    stall_usability: dict[str, Any],
+) -> dict[str, Any]:
+    """Connected accessible-route pieces and declared connects destinations.
+
+    Not slope, width, or a pedestrian graph through the aisle network.
+    """
+    requested = bool(stall_usability.get("requested"))
+    tolerance = stall_usability.get("touch_tolerance")
+    routes = _hard_routes(layout.site, {"accessible_route"})
+    connects = _accessible_route_connect_tokens(layout.site)
+    base = {
+        "requested": requested,
+        "touch_tolerance": tolerance,
+        "route_ids": [item.id for item in routes],
+        "connects": connects,
+        "components": [],
+        "serving_route_ids": [],
+        "destination_ids": [],
+        "missing_connect_ids": [],
+        "unreached_destination_ids": [],
+        "errors": [],
+        "reason": None,
+    }
+    if stall_usability.get("status") == "active_failed" and stall_usability.get("reason", "").startswith("invalid_"):
+        return {**base, "status": "active_failed", "reason": stall_usability.get("reason"), "errors": []}
+    if not requested:
+        return {**base, "status": "not_requested"}
+    if not routes:
+        return {
+            **base,
+            "status": "active_failed",
+            "reason": "accessible_route_geometry_missing",
+            "errors": [],
+        }
+    if not isinstance(tolerance, int | float):
+        return {**base, "status": "active_failed", "reason": "invalid_accessible_route_touch_tolerance", "errors": []}
+
+    components = _route_components(routes, float(tolerance))
+    stall_by_id = {stall.id: stall for stall in layout.stalls}
+    serving_ids: list[str] = []
+    for stall_id in stall_usability.get("reachable_stall_ids", []):
+        stall = stall_by_id.get(str(stall_id))
+        if stall is None:
+            continue
+        for route in routes:
+            if route.id in serving_ids:
+                continue
+            if _geometry_reaches_geometry(ShapelyPolygon(stall.polygon), route.base_geometry, float(tolerance)):
+                serving_ids.append(route.id)
+    serving_component_keys = {
+        index
+        for index, component in enumerate(components)
+        if any(route_id in component for route_id in serving_ids)
+    }
+    destinations, missing = _resolve_accessible_connect_targets(layout.site, connects)
+    serving_routes = [item for item in routes if item.id in serving_ids] or list(routes)
+    unreached = [
+        dest_id
+        for dest_id, dest_geom in destinations
+        if not any(_geometry_reaches_geometry(route.base_geometry, dest_geom, float(tolerance)) for route in serving_routes)
+    ]
+    errors: list[str] = []
+    reason = None
+    if missing:
+        reason = "accessible_route_connects_target_missing"
+        errors.append("accessible_routes.connects names unknown geometry: " + ", ".join(missing))
+    elif len(serving_component_keys) > 1:
+        reason = "accessible_route_network_disconnected"
+        errors.append(
+            "classified accessible stalls reach disconnected accessible-route pieces: "
+            + "; ".join(",".join(components[index]) for index in sorted(serving_component_keys))
+        )
+    elif unreached:
+        reason = "accessible_route_does_not_reach_destination"
+        errors.append(
+            "accessible-route network does not reach declared connects destinations within "
+            f"{tolerance} m: {', '.join(unreached)}"
+        )
+    return {
+        **base,
+        "status": "active_failed" if errors else "active",
+        "components": components,
+        "serving_route_ids": serving_ids,
+        "destination_ids": [item[0] for item in destinations],
+        "missing_connect_ids": missing,
+        "unreached_destination_ids": unreached,
+        "reason": reason,
+        "errors": errors,
+    }
+
+
+def _accessible_route_connect_tokens(site: SiteSpec) -> list[str]:
+    tokens: list[str] = []
+    raw_items = site.pedestrian_and_emergency.get("accessible_routes", [])
+    if not isinstance(raw_items, list):
+        return tokens
+    for item in raw_items:
+        if not isinstance(item, dict):
+            continue
+        raw = item.get("connects", [])
+        if isinstance(raw, str):
+            values = [raw]
+        elif isinstance(raw, list | tuple):
+            values = list(raw)
+        else:
+            continue
+        for value in values:
+            token = str(value).strip()
+            if token and token not in tokens:
+                tokens.append(token)
+    return tokens
+
+
+def _resolve_accessible_connect_targets(
+    site: SiteSpec,
+    tokens: list[str],
+) -> tuple[list[tuple[str, BaseGeometry]], list[str]]:
+    destinations: list[tuple[str, BaseGeometry]] = []
+    missing: list[str] = []
+    for token in tokens:
+        if _normalize_connect_token(token) in _RESERVED_ACCESSIBLE_CONNECT_TOKENS:
+            continue
+        geometry = _named_site_geometry(site, token)
+        if geometry is None or geometry.is_empty:
+            missing.append(token)
+        else:
+            destinations.append((token, geometry))
+    return destinations, missing
+
+
+def _normalize_connect_token(token: str) -> str:
+    return token.strip().lower().replace(" ", "-").replace("_", "-")
+
+
+def _named_site_geometry(site: SiteSpec, token: str) -> BaseGeometry | None:
+    for feature in site.site_features:
+        if isinstance(feature, dict) and str(feature.get("id", "")) == token and "geometry" in feature:
+            try:
+                return _declared_geometry(feature.get("geometry"), f"site_features[{token}].geometry")
+            except ValueError:
+                return None
+    for spec in (*site.reserved_areas, *site.obstacle_specs):
+        if spec.id == token:
+            try:
+                return _declared_geometry(spec.geometry, f"{spec.id}.geometry")
+            except ValueError:
+                return None
+    for entrance in site.entrances:
+        if entrance.id == token:
+            return _entrance_gate_geometry(entrance)
+    for source in ("accessible_route", "pedestrian_route", "fire_lane", "access_route", "emergency_access_route"):
+        for route in _hard_routes(site, {source}):
+            if route.id == token:
+                return route.base_geometry
+    return None
+
+
+def _route_components(routes: list[ConstraintGeometry], tolerance: float) -> list[list[str]]:
+    parent = list(range(len(routes)))
+
+    def find(index: int) -> int:
+        while parent[index] != index:
+            parent[index] = parent[parent[index]]
+            index = parent[index]
+        return index
+
+    for left, start in enumerate(routes):
+        for right in range(left + 1, len(routes)):
+            if _geometry_reaches_geometry(start.base_geometry, routes[right].base_geometry, tolerance):
+                root_left = find(left)
+                root_right = find(right)
+                if root_left != root_right:
+                    parent[root_right] = root_left
+    groups: dict[int, list[str]] = {}
+    for index, route in enumerate(routes):
+        groups.setdefault(find(index), []).append(route.id)
+    return [groups[key] for key in sorted(groups)]
+
+
+def _accessible_route_dimensions(site: SiteSpec) -> dict[str, Any]:
+    """Audit declared min_width; fail-closed on max_slope (no elevation model)."""
+    items = _hard_accessible_route_items(site)
+    requested = any("min_width" in item or "max_slope" in item for item in items)
+    base = {
+        "requested": requested,
+        "checked_route_ids": [],
+        "min_width_ok_ids": [],
+        "too_narrow_ids": [],
+        "width_unresolved_ids": [],
+        "slope_declared_ids": [],
+        "errors": [],
+        "reason": None,
+    }
+    if not requested:
+        return {**base, "status": "not_requested"}
+    errors: list[str] = []
+    reason: str | None = None
+    for item in items:
+        route_id = str(item.get("id") or "accessible-route")
+        if "min_width" in item or "max_slope" in item:
+            base["checked_route_ids"].append(route_id)
+        if "min_width" in item:
+            min_width, min_error = _positive_route_number(item.get("min_width"), "min_width")
+            if min_error:
+                reason = reason or min_error
+                errors.append(f"accessible route '{route_id}' has {min_error}")
+            else:
+                width, width_error = _declared_polyline_width(item)
+                if width_error:
+                    base["width_unresolved_ids"].append(route_id)
+                    reason = reason or width_error
+                    errors.append(f"accessible route '{route_id}' {width_error}")
+                elif width is not None and min_width is not None and width + 1e-9 < min_width:
+                    base["too_narrow_ids"].append(route_id)
+                    reason = reason or "accessible_route_narrower_than_min_width"
+                    errors.append(
+                        f"accessible route '{route_id}' width {width} m is below min_width {min_width} m"
+                    )
+                else:
+                    base["min_width_ok_ids"].append(route_id)
+        if "max_slope" in item:
+            _, slope_error = _nonnegative_route_number(item.get("max_slope"), "max_slope")
+            if slope_error:
+                reason = reason or slope_error
+                errors.append(f"accessible route '{route_id}' has {slope_error}")
+            else:
+                base["slope_declared_ids"].append(route_id)
+                reason = reason or "accessible_route_slope_check_unsupported"
+                errors.append(
+                    f"accessible route '{route_id}' declares max_slope but elevation is not modeled"
+                )
+    return {
+        **base,
+        "status": "active_failed" if errors else "active",
+        "reason": reason,
+        "errors": errors,
+    }
+
+
+def _hard_accessible_route_items(site: SiteSpec) -> list[dict[str, Any]]:
+    raw_items = site.pedestrian_and_emergency.get("accessible_routes", [])
+    if not isinstance(raw_items, list):
+        return []
+    items: list[dict[str, Any]] = []
+    for item in raw_items:
+        if not isinstance(item, dict) or not item.get("enabled", True) or "geometry" not in item:
+            continue
+        priority = str(item.get("priority", "hard")).strip().lower()
+        authority = str(item.get("authority", "project_policy")).strip().lower()
+        if authority == "advisory" or priority in _ADVISORY_PRIORITIES:
+            continue
+        items.append(item)
+    return items
+
+
+def _declared_polyline_width(item: dict[str, Any]) -> tuple[float | None, str | None]:
+    geometry = item.get("geometry")
+    if not isinstance(geometry, dict):
+        return None, "accessible_route_width_not_auditable_for_geometry"
+    if str(geometry.get("type", "")).strip().lower() != "polyline_buffer":
+        return None, "accessible_route_width_not_auditable_for_geometry"
+    if "width" not in geometry:
+        return None, "accessible_route_width_not_auditable_for_geometry"
+    return _positive_route_number(geometry.get("width"), "geometry_width")
+
+
+def _positive_route_number(raw: object, label: str) -> tuple[float | None, str | None]:
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None, f"invalid_accessible_route_{label}"
+    if not math.isfinite(value) or value <= 0.0:
+        return None, f"invalid_accessible_route_{label}"
+    return value, None
+
+
+def _nonnegative_route_number(raw: object, label: str) -> tuple[float | None, str | None]:
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None, f"invalid_accessible_route_{label}"
+    if not math.isfinite(value) or value < 0.0:
+        return None, f"invalid_accessible_route_{label}"
+    return value, None
+
+
+def _emergency_access_connectivity(layout: LayoutResult) -> dict[str, Any]:
+    requested = bool(layout.site.pedestrian_and_emergency.get("emergency_access_required", False))
+    tolerance, config_error = _constraint_tolerance(
+        layout.site,
+        "emergency_route_touch_tolerance",
+        DEFAULT_EMERGENCY_ROUTE_TOUCH_TOLERANCE,
+    )
+    routes = _hard_routes(layout.site, _EMERGENCY_ROUTE_SOURCES)
+    base = {
+        "requested": requested,
+        "touch_tolerance": tolerance,
+        "route_ids": [item.id for item in routes],
+        "connected_route_ids": [],
+        "unconnected_route_ids": [],
+        "connected_entrance_ids": [],
+        "errors": [],
+        "reason": None,
+    }
+    if config_error:
+        return {
+            **base,
+            "status": "active_failed",
+            "reason": config_error,
+            "errors": [config_error],
+        }
+    if not requested:
+        return {**base, "status": "not_requested"}
+    if not routes:
+        return {
+            **base,
+            "status": "active_failed",
+            "reason": "emergency_access_geometry_missing",
+            "errors": [],
+        }
+    assert tolerance is not None
+    gates = [(entrance.id, _entrance_gate_geometry(entrance)) for entrance in layout.site.entrances]
+    connected_routes: list[str] = []
+    unconnected: list[str] = []
+    connected_entrances: set[str] = set()
+    for route in routes:
+        matched = [
+            entrance_id
+            for entrance_id, gate in gates
+            if _geometry_reaches_geometry(route.base_geometry, gate, tolerance)
+        ]
+        if matched:
+            connected_routes.append(route.id)
+            connected_entrances.update(matched)
+        else:
+            unconnected.append(route.id)
+    errors: list[str] = []
+    reason = None
+    if not gates:
+        reason = "emergency_access_entrance_missing"
+        errors.append("emergency_access_required needs at least one entrance for route connectivity")
+    elif not connected_routes:
+        reason = "emergency_route_does_not_reach_entrance"
+        errors.append(
+            "hard fire/access routes do not reach an entrance gate within "
+            f"{tolerance} m: {', '.join(unconnected)}"
+        )
+    return {
+        **base,
+        "status": "active_failed" if errors else "active",
+        "connected_route_ids": connected_routes,
+        "unconnected_route_ids": unconnected,
+        "connected_entrance_ids": sorted(connected_entrances),
+        "reason": reason,
+        "errors": errors,
+    }
+
+
+def _ev_charger_usability(layout: LayoutResult) -> dict[str, Any]:
+    quota_requested = int(layout.site.parking_quotas.get("ev_min", 0)) > 0
+    chargers = _hard_charger_features(layout.site)
+    requested = quota_requested and bool(chargers)
+    tolerance, config_error = _constraint_tolerance(
+        layout.site,
+        "ev_charger_touch_tolerance",
+        DEFAULT_EV_CHARGER_TOUCH_TOLERANCE,
+    )
+    quota = validate_parking_quotas(layout)
+    stall_ids = list(quota.get("matching_stall_ids", {}).get("ev", []))
+    base = {
+        "requested": requested,
+        "touch_tolerance": tolerance,
+        "charger_ids": [item.id for item in chargers],
+        "checked_stall_ids": stall_ids,
+        "reachable_stall_ids": [],
+        "unreachable_stall_ids": [],
+        "errors": [],
+        "reason": None,
+    }
+    if not requested:
+        return {**base, "status": "not_requested"}
+    if config_error:
+        return {
+            **base,
+            "status": "active_failed",
+            "reason": config_error,
+            "errors": [config_error],
+        }
+    stall_by_id = {stall.id: stall for stall in layout.stalls}
+    reachable: list[str] = []
+    unreachable: list[str] = []
+    assert tolerance is not None
+    for stall_id in stall_ids:
+        stall = stall_by_id.get(stall_id)
+        if stall is None or not _geometry_reaches_routes(ShapelyPolygon(stall.polygon), chargers, tolerance):
+            unreachable.append(stall_id)
+        else:
+            reachable.append(stall_id)
+    errors: list[str] = []
+    reason = None
+    if unreachable:
+        reason = "ev_stall_does_not_reach_charger"
+        errors.append(
+            "EV stalls do not reach a placed charging post within "
+            f"{tolerance} m: {', '.join(unreachable)}"
+        )
+    return {
+        **base,
+        "status": "active_failed" if errors else "active",
+        "reachable_stall_ids": reachable,
+        "unreachable_stall_ids": unreachable,
+        "reason": reason,
+        "errors": errors,
+    }
+
+
+def accessible_route_dimensions_requested(site: SiteSpec) -> bool:
+    return any("min_width" in item or "max_slope" in item for item in _hard_accessible_route_items(site))
+
+
+def has_hard_accessible_route_geometry(site: SiteSpec) -> bool:
+    return bool(_hard_routes(site, {"accessible_route"}))
+
+
+def has_hard_charger_geometry(site: SiteSpec) -> bool:
+    return bool(_hard_charger_features(site))
+
+
+def _hard_charger_features(site: SiteSpec) -> list[ConstraintGeometry]:
+    chargers: list[ConstraintGeometry] = []
+    for index, feature in enumerate(site.site_features, start=1):
+        if not isinstance(feature, dict) or not feature.get("enabled", True):
+            continue
+        kind = str(feature.get("type", "")).strip().lower()
+        if kind not in _CHARGER_KINDS or "geometry" not in feature:
+            continue
+        try:
+            geometry = _declared_geometry(feature.get("geometry"), f"site_features[{index}].geometry")
+            clearance = _nonnegative_float(feature.get("clearance", 0.0), f"site_features[{index}].clearance")
+        except ValueError:
+            continue
+        item = _make_constraint(
+            constraint_id=str(feature.get("id", f"charger-{index}")),
+            source="site_feature",
+            kind=kind,
+            geometry=geometry,
+            clearance=clearance,
+            purposes=frozenset(),
+            affects=tuple(str(value) for value in feature.get("affects", [])),
+            authority=str(feature.get("authority", "project_policy")),
+            priority=str(feature.get("priority", "hard")),
+        )
+        if item.hard:
+            chargers.append(item)
+    return chargers
+
+
+def _hard_routes(site: SiteSpec, sources: set[str]) -> list[ConstraintGeometry]:
+    try:
+        declarations = declared_constraint_geometries(site)
+    except ValueError:
+        return []
+    return [item for item in declarations if item.source in sources and item.hard]
+
+
+def _geometry_reaches_routes(geometry: BaseGeometry, routes: list[ConstraintGeometry], tolerance: float) -> bool:
+    return any(_geometry_reaches_geometry(geometry, route.base_geometry, tolerance) for route in routes)
+
+
+def _geometry_reaches_geometry(left: BaseGeometry, right: BaseGeometry, tolerance: float) -> bool:
+    if left.is_empty or right.is_empty:
+        return False
+    reach = left.buffer(tolerance) if tolerance > 0.0 else left
+    return bool(reach.intersects(right))
+
+
+def _entrance_gate_geometry(entrance: EntranceSpec) -> BaseGeometry:
+    heading = math.radians(entrance.heading_degrees)
+    perp_x = -math.sin(heading)
+    perp_y = math.cos(heading)
+    half = max(float(entrance.width), 0.0) / 2.0
+    cx, cy = entrance.center
+    return LineString(
+        [
+            (cx - perp_x * half, cy - perp_y * half),
+            (cx + perp_x * half, cy + perp_y * half),
+        ]
+    ).buffer(0.25)
+
+
+def _constraint_tolerance(site: SiteSpec, key: str, default: float) -> tuple[float | None, str | None]:
+    raw = site.constraints.get(key, default)
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None, f"invalid_{key}"
+    if not math.isfinite(value) or value < 0.0:
+        return None, f"invalid_{key}"
+    return value, None
 
 
 def stall_type_capabilities(spec: StallSpec | None) -> frozenset[str]:

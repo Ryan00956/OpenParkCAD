@@ -71,7 +71,22 @@ def write_svg(layout: LayoutResult, path: str | Path) -> None:
                 f'fill="{_xml_attr(style["stroke"])}">{_xml_text(shape.id)}</text>'
             )
     for aisle in layout.aisles:
-        parts.append(_polygon_svg([tx(point) for point in aisle.polygon], "#e5e7eb", "#6b7280", 0.04))
+        style = _aisle_style(aisle.role)
+        poly = [tx(point) for point in aisle.polygon]
+        parts.append(
+            _polygon_svg(
+                poly,
+                str(style["fill"]),
+                str(style["stroke"]),
+                float(style["stroke_width"]),
+                opacity=float(style["opacity"]),
+            )
+        )
+        cx, cy = _centroid(poly)
+        parts.append(
+            f'<text x="{cx:.3f}" y="{cy:.3f}" font-size="0.75" text-anchor="middle" '
+            f'fill="{_xml_attr(str(style["stroke"]))}">{_xml_text(aisle.id)}</text>'
+        )
     preview_aisles = _candidate_preview_aisles(layout)
     if preview_aisles:
         parts.append('<g id="candidate-network-preview" data-status="preview-only">')
@@ -262,6 +277,25 @@ def _polygon_key(raw: object) -> tuple[tuple[float, float], ...]:
     return tuple(sorted((round(float(x), 6), round(float(y), 6)) for x, y in raw))
 
 
+def _aisle_style(role: str) -> dict[str, float | str]:
+    """Official layout aisle styling by role (solid fills for CAD-style preview)."""
+    if role == "main":
+        return {"fill": "#e5e7eb", "stroke": "#4b5563", "stroke_width": 0.05, "opacity": 0.92}
+    if role == "turnaround":
+        return {"fill": "#d1fae5", "stroke": "#047857", "stroke_width": 0.05, "opacity": 0.90}
+    if role == "branch":
+        return {"fill": "#dbeafe", "stroke": "#1d4ed8", "stroke_width": 0.05, "opacity": 0.90}
+    if role == "connector":
+        return {"fill": "#fef3c7", "stroke": "#b45309", "stroke_width": 0.06, "opacity": 0.90}
+    if role == "jog":
+        return {"fill": "#ede9fe", "stroke": "#6d28d9", "stroke_width": 0.06, "opacity": 0.92}
+    if role == "exit":
+        return {"fill": "#cffafe", "stroke": "#0e7490", "stroke_width": 0.06, "opacity": 0.90}
+    if role == "passing_bay":
+        return {"fill": "#ffedd5", "stroke": "#c2410c", "stroke_width": 0.06, "opacity": 0.88}
+    return {"fill": "#e5e7eb", "stroke": "#6b7280", "stroke_width": 0.04, "opacity": 0.90}
+
+
 def _candidate_preview_style(role: str) -> dict[str, float | str]:
     if role == "main":
         return {"fill": "#ccfbf1", "stroke": "#0f766e", "stroke_width": 0.10, "opacity": 0.28, "dasharray": "0.9 0.45"}
@@ -269,4 +303,12 @@ def _candidate_preview_style(role: str) -> dict[str, float | str]:
         return {"fill": "#d9f99d", "stroke": "#4d7c0f", "stroke_width": 0.10, "opacity": 0.26, "dasharray": "0.9 0.45"}
     if role == "connector":
         return {"fill": "#fde68a", "stroke": "#b45309", "stroke_width": 0.12, "opacity": 0.34, "dasharray": "0.7 0.35"}
+    if role == "jog":
+        return {"fill": "#ddd6fe", "stroke": "#6d28d9", "stroke_width": 0.12, "opacity": 0.32, "dasharray": "0.7 0.35"}
+    if role == "exit":
+        return {"fill": "#a5f3fc", "stroke": "#0e7490", "stroke_width": 0.12, "opacity": 0.32, "dasharray": "0.7 0.35"}
+    if role == "passing_bay":
+        return {"fill": "#fed7aa", "stroke": "#c2410c", "stroke_width": 0.12, "opacity": 0.34, "dasharray": "0.6 0.3"}
+    if role == "branch":
+        return {"fill": "#bfdbfe", "stroke": "#1d4ed8", "stroke_width": 0.12, "opacity": 0.32, "dasharray": "0.7 0.35"}
     return {"fill": "#f0abfc", "stroke": "#a21caf", "stroke_width": 0.12, "opacity": 0.32, "dasharray": "0.7 0.35"}

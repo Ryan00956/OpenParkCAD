@@ -11,7 +11,8 @@ from openparkcad.operational_quality import operational_quality_report
 from openparkcad.phase1_candidates import iter_phase1_candidates
 from openparkcad.phase1_support import phase1_unsupported_inputs
 from openparkcad.scoring import score_layout, score_total
-from openparkcad.site_constraints import validate_site_constraints
+from openparkcad.contact_retarget import apply_contact_retarget
+from openparkcad.site_constraints import apply_contact_filter, validate_site_constraints
 from openparkcad.traffic_graph import build_traffic_graph, validate_traffic_graph
 
 
@@ -22,7 +23,19 @@ def generate_layout(site: SiteSpec) -> LayoutResult:
         selected_site = _site_with_stall_assignment(site, candidates[0], candidates[0])
         layout = _generate_layout_for_site(selected_site)
         selected = _layout_valid(layout)
-        object.__setattr__(layout, "site", replace(selected_site, stall_candidates=candidates))
+        # Preserve layout.site mutations (e.g. synthesized passing-bay site_features).
+        object.__setattr__(
+            layout,
+            "site",
+            replace(
+                layout.site,
+                stall=selected_site.stall,
+                main_stall=selected_site.main_stall,
+                branch_stall=selected_site.branch_stall,
+                angle_degrees=selected_site.angle_degrees,
+                stall_candidates=candidates,
+            ),
+        )
         object.__setattr__(layout, "selected_stall_type_id", candidates[0].id if selected else None)
         object.__setattr__(
             layout,
@@ -42,15 +55,18 @@ def generate_layout(site: SiteSpec) -> LayoutResult:
     best_is_valid = _layout_valid(best)
     selected_main = best.site.main_stall or best.site.stall
     selected_branch = best.site.branch_stall or selected_main
-    selected_site = replace(
-        site,
-        stall=selected_main,
-        main_stall=selected_main,
-        branch_stall=selected_branch,
-        angle_degrees=selected_main.allowed_angles[0],
-        stall_candidates=candidates,
+    object.__setattr__(
+        best,
+        "site",
+        replace(
+            best.site,
+            stall=selected_main,
+            main_stall=selected_main,
+            branch_stall=selected_branch,
+            angle_degrees=selected_main.allowed_angles[0],
+            stall_candidates=candidates,
+        ),
     )
-    object.__setattr__(best, "site", selected_site)
     object.__setattr__(
         best,
         "selected_stall_type_id",
@@ -88,7 +104,7 @@ def generate_layout(site: SiteSpec) -> LayoutResult:
             for layout in layouts
         ],
     )
-    object.__setattr__(best, "unsupported_phase1_inputs", phase1_unsupported_inputs(selected_site))
+    object.__setattr__(best, "unsupported_phase1_inputs", phase1_unsupported_inputs(best.site))
     return attach_candidate_snapshot(_with_engineering_validation(best))
 
 
@@ -187,12 +203,14 @@ def _generate_layout_for_site(site: SiteSpec) -> LayoutResult:
         return _with_score(_with_engineering_validation(empty))
 
     result = LayoutResult(
-        site=site,
+        # Prefer the candidate site so synthesized site_features (e.g. passing bays)
+        # survive promotion into the official layout.
+        site=best.site,
         stalls=best.stalls,
         aisles=best.aisles,
         selected_angle_degrees=best.selected_angle_degrees,
         attempts=attempts,
-        generation_mode="phase1_main_aisle",
+        generation_mode=best.generation_mode or "phase1_main_aisle",
         main_entrance_id=best.main_entrance_id,
         selected_heading_degrees=best.selected_heading_degrees,
         selected_heading_delta_degrees=best.selected_heading_delta_degrees,
@@ -230,7 +248,7 @@ def _site_with_stall_assignment(site: SiteSpec, main_stall: StallSpec, branch_st
         main_stall=main_stall,
         branch_stall=branch_stall,
         angle_degrees=main_stall.allowed_angles[0],
-        stall_candidates=(),
+        stall_candidates=site.stall_candidates,
     )
 
 
@@ -322,6 +340,12 @@ def _with_engineering_validation(layout: LayoutResult) -> LayoutResult:
 
 def _finalize_candidate(layout: LayoutResult) -> LayoutResult:
     filtered = apply_maneuver_filter(layout)
+    before = [(stall.id, stall.stall_type_id, tuple(stall.polygon)) for stall in filtered.stalls]
+    filtered = apply_contact_retarget(filtered)
+    after = [(stall.id, stall.stall_type_id, tuple(stall.polygon)) for stall in filtered.stalls]
+    if after != before:
+        filtered = apply_maneuver_filter(filtered)
+    filtered = apply_contact_filter(filtered)
     validated = _with_site_constraint_validation(_with_graph_validation(filtered))
     validated = _with_operational_quality(validated)
     return _with_score(_with_engineering_validation(validated))
