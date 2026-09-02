@@ -642,7 +642,7 @@ finally {
 以下清单当前全部待实施；完成时附上对应 commit 或证据路径，不只改复选框。
 
 - [x] E0：已有基线可复查，未覆盖原有工作与输出。证据：scratch `e0-baseline/`（commit `2e2766ae81d975e042551a24c18c8a1a88056ca1`，301 passed，`examples/phase0_site.json` 三件套 stall_count=83，`engineering_validation.result_scope=official_layout`）；仓库内 gitignored 副本 `output/verification/v0_4/20260902-214041-baseline/`。本步无运行时逻辑改动。
-- [ ] E1：19 个现有输入进入 manifest，smoke/full 集合固定，runner 保存成功与失败证据。
+- [x] E1：19 个现有输入进入 manifest，smoke/full 集合固定，runner 保存成功与失败证据。证据：`benchmarks/layout_v0_4.json`、`tools/benchmark_layouts.py`、`tools/benchmark_case.py`、`tests/test_layout_benchmark.py`；协议测试日志 scratch `e1-pytest.log`；smoke `--profile legacy --subset smoke` 结果 scratch `e1-benchmark/` 与 `output/benchmarks/v0_4/20260902-220518-legacy-smoke/`（6 valid / 4 预期 invalid / 5 次 actual cpsat）。
 - [ ] E2：默认依赖与 optimizer 依赖 CI 均有真实执行结果。
 - [ ] E3：候选身份、数据隔离和无发布副作用的评估接口完成。
 - [ ] E4：直线、偏移和已生成的绕障候选在局部择优前保留完整上下文。
