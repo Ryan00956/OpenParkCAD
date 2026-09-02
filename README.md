@@ -235,6 +235,7 @@ on Python 3.10 and 3.12.
 - [Changelog](CHANGELOG.md)
 - [Current status and capability matrix](docs/current_status.md)
 - [Roadmap](docs/roadmap.md)
+- [Next iteration execution plan: benchmarks and multi-spine search](docs/v0_4_multi_spine_execution_plan.md)
 - [Input model](docs/input_model.md)
 - [v0.3 vehicle and enforced-constraint contract](docs/v0.3_vehicle_and_constraints.md)
 - [Algorithm design discussion](docs/algorithm_design_discussion.md)

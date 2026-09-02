@@ -93,6 +93,12 @@ validation or real customer sites.
 
 ## v0.4: Global candidate optimization
 
+The next implementation sequence is specified in the
+[benchmark and multi-spine execution plan](v0_4_multi_spine_execution_plan.md).
+It covers a fixed comparison corpus, optimizer CI, isolated per-spine candidate
+evaluation, Top-K search, and final-layout verification. It is planned work,
+not an additional current-capability claim.
+
 Replace heuristic-only selection without losing the current explainable
 baseline. The first slice is a catalog, not a new generator:
 

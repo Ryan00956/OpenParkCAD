@@ -4,6 +4,11 @@ This document turns the algorithm discussion into a step-by-step project plan.
 It is intentionally conservative: each phase should produce something that can
 be inspected, tested, and explained before the next layer is added.
 
+For the next development iteration, use the
+[v0.4 benchmark and multi-spine execution plan](v0_4_multi_spine_execution_plan.md).
+That plan lists pending implementation steps, contracts, commands, and acceptance
+criteria; the historical implementation slices below provide context.
+
 ## Guiding Rule
 
 Do not optimize parking count before the layout is provably usable.
