@@ -8,12 +8,27 @@ from openparkcad.engineering_validation import build_engineering_validation
 from openparkcad.maneuver_validation import apply_maneuver_filter
 from openparkcad.models import AngleAttempt, LayoutResult, SiteSpec, StallSpec
 from openparkcad.operational_quality import operational_quality_report
-from openparkcad.phase1_candidates import iter_phase1_candidates
+from openparkcad.layout_candidates import LayoutCandidateContext
+from openparkcad.phase1_candidates import collect_phase1_candidate_contexts, iter_phase1_candidates
 from openparkcad.phase1_support import phase1_unsupported_inputs
 from openparkcad.scoring import score_layout, score_total
 from openparkcad.contact_retarget import apply_contact_retarget
 from openparkcad.site_constraints import apply_contact_filter, validate_site_constraints
 from openparkcad.traffic_graph import build_traffic_graph, validate_traffic_graph
+
+
+def collect_layout_candidate_contexts(site: SiteSpec) -> list[LayoutCandidateContext]:
+    """Collect complete per-spine contexts, including stall-family variants.
+
+    Does not change the legacy ``generate_layout`` ranking path.
+    """
+    contexts: list[LayoutCandidateContext] = []
+    for main_stall, branch_stall in _candidate_stall_assignments(site):
+        assigned = _site_with_stall_assignment(site, main_stall, branch_stall)
+        contexts.extend(
+            collect_phase1_candidate_contexts(assigned, _finalize_candidate, _layout_valid, score_total)
+        )
+    return contexts
 
 
 def generate_layout(site: SiteSpec) -> LayoutResult:

@@ -70,6 +70,7 @@ def iter_phase1_candidates(
     finalize_layout: FinalizeLayout,
     layout_valid: LayoutValid,
     score_total: LayoutScoreTotal,
+    context_sink: list | None = None,
 ) -> list[Phase1Candidate]:
     candidates: list[Phase1Candidate] = []
     for entrance in entry_capable_entrances(site):
@@ -88,6 +89,7 @@ def iter_phase1_candidates(
                         layout_valid,
                         score_total,
                         aisle_lateral_offset=lateral,
+                        context_sink=context_sink,
                     )
                     candidates.append(
                         Phase1Candidate(
@@ -103,6 +105,74 @@ def iter_phase1_candidates(
     return candidates
 
 
+def collect_phase1_candidate_contexts(
+    site: SiteSpec,
+    finalize_layout: FinalizeLayout,
+    layout_valid: LayoutValid,
+    score_total: LayoutScoreTotal,
+) -> list:
+    """Collect complete spine contexts before local ranking discards them."""
+    from openparkcad.layout_candidates import context_from_layout
+
+    sink: list[dict[str, object]] = []
+    iter_phase1_candidates(site, finalize_layout, layout_valid, score_total, context_sink=sink)
+    contexts = []
+    for record in sink:
+        layout = record["layout"]
+        status = "collected"
+        reason = None
+        if not layout.aisles:
+            status = "rejected"
+            reason = "no_road_geometry"
+        elif layout.stall_count <= 0:
+            status = "requires_layout_rebuild"
+            reason = "insufficient_stalls"
+        contexts.append(
+            context_from_layout(
+                layout,
+                source=dict(record.get("source") or {}),
+                branch_diagnostics=list(record.get("branch_diagnostics") or []),
+                collect_status=status,
+                reject_reason=reason,
+            )
+        )
+    return contexts
+
+
+def _record_collected_spine(
+    context_sink: list | None,
+    layout: LayoutResult,
+    *,
+    family: str,
+    aisle_lateral_offset: float,
+    dogleg_offset: float | None,
+    entrance_id: str | None,
+    heading_degrees: float,
+    heading_delta_degrees: float,
+    entrance_offset: float,
+    branch_diagnostics: list | None = None,
+) -> None:
+    if context_sink is None:
+        return
+    from openparkcad.layout_candidates import copy_layout
+
+    context_sink.append(
+        {
+            "layout": copy_layout(layout),
+            "source": {
+                "family": family,
+                "aisle_lateral_offset": float(aisle_lateral_offset),
+                "dogleg_offset": None if dogleg_offset is None else float(dogleg_offset),
+                "entrance_id": entrance_id,
+                "heading_degrees": heading_degrees,
+                "heading_delta_degrees": heading_delta_degrees,
+                "entrance_offset": entrance_offset,
+            },
+            "branch_diagnostics": list(branch_diagnostics or []),
+        }
+    )
+
+
 def _generate_for_entrance(
     site: SiteSpec,
     entrance: EntranceSpec,
@@ -113,6 +183,7 @@ def _generate_for_entrance(
     layout_valid: LayoutValid,
     score_total: LayoutScoreTotal,
     aisle_lateral_offset: float = 0.0,
+    context_sink: list | None = None,
 ) -> tuple[LayoutResult, list[dict[str, object]]]:
     if not supports_phase1_aisle(site) or not supports_phase1_stall(site) or entrance.width + 1e-9 < site.aisle_width:
         return _empty_layout(site, entrance, heading_degrees, heading_delta_degrees, entrance_offset, finalize_layout), []
@@ -146,10 +217,24 @@ def _generate_for_entrance(
             finalize_layout,
             layout_valid,
             score_total,
+            aisle_lateral_offset=aisle_lateral_offset,
+            context_sink=context_sink,
         )
         if dogleg is not None:
             return dogleg
-        return _empty_layout(site, entrance, heading_degrees, heading_delta_degrees, entrance_offset, finalize_layout), []
+        empty = _empty_layout(site, entrance, heading_degrees, heading_delta_degrees, entrance_offset, finalize_layout)
+        _record_collected_spine(
+            context_sink,
+            empty,
+            family="straight",
+            aisle_lateral_offset=aisle_lateral_offset,
+            dogleg_offset=None,
+            entrance_id=entrance.id,
+            heading_degrees=heading_degrees,
+            heading_delta_degrees=heading_delta_degrees,
+            entrance_offset=entrance_offset,
+        )
+        return empty, []
 
     main_body = main_aisle_polygon(site, geom_entrance, heading_degrees, start, aisle_length)
     turnaround = turnaround_polygon(site, geom_entrance, heading_degrees, aisle_length)
@@ -171,10 +256,24 @@ def _generate_for_entrance(
             finalize_layout,
             layout_valid,
             score_total,
+            aisle_lateral_offset=aisle_lateral_offset,
+            context_sink=context_sink,
         )
         if dogleg is not None:
             return dogleg
-        return _empty_layout(site, entrance, heading_degrees, heading_delta_degrees, entrance_offset, finalize_layout), []
+        empty = _empty_layout(site, entrance, heading_degrees, heading_delta_degrees, entrance_offset, finalize_layout)
+        _record_collected_spine(
+            context_sink,
+            empty,
+            family="straight",
+            aisle_lateral_offset=aisle_lateral_offset,
+            dogleg_offset=None,
+            entrance_id=entrance.id,
+            heading_degrees=heading_degrees,
+            heading_delta_degrees=heading_delta_degrees,
+            entrance_offset=entrance_offset,
+        )
+        return empty, []
     main_aisle = unary_union([main_body, throat]) if not throat.is_empty else main_body
     aisles = [
         ParkingAisle(
@@ -260,6 +359,18 @@ def _generate_for_entrance(
         finalize_layout=finalize_layout,
         layout_valid=layout_valid,
     )
+    _record_collected_spine(
+        context_sink,
+        straight_layout,
+        family="straight",
+        aisle_lateral_offset=aisle_lateral_offset,
+        dogleg_offset=None,
+        entrance_id=entrance.id,
+        heading_degrees=heading_degrees,
+        heading_delta_degrees=heading_delta_degrees,
+        entrance_offset=entrance_offset,
+        branch_diagnostics=straight_diags,
+    )
     # If the straight spine is short because of obstacles, a dogleg may recover depth.
     if _dogleg_enabled(site) and site.obstacles:
         dogleg = _generate_dogleg_for_entrance(
@@ -274,6 +385,8 @@ def _generate_for_entrance(
             finalize_layout,
             layout_valid,
             score_total,
+            aisle_lateral_offset=aisle_lateral_offset,
+            context_sink=context_sink,
         )
         if dogleg is not None:
             dogleg_layout, dogleg_diags = dogleg
@@ -489,6 +602,8 @@ def _generate_dogleg_for_entrance(
     finalize_layout: FinalizeLayout,
     layout_valid: LayoutValid,
     score_total: LayoutScoreTotal,
+    aisle_lateral_offset: float = 0.0,
+    context_sink: list | None = None,
 ) -> tuple[LayoutResult, list[dict[str, object]]] | None:
     """Build a centerline-front + lateral jog + offset-rear main aisle around obstacles.
 
@@ -664,6 +779,19 @@ def _generate_dogleg_for_entrance(
         if not layout_valid(base):
             diagnostic["reason"] = "dogleg_invalid"
             best_diag.append(diagnostic)
+            if base.aisles:
+                _record_collected_spine(
+                    context_sink,
+                    base,
+                    family="dogleg",
+                    aisle_lateral_offset=aisle_lateral_offset,
+                    dogleg_offset=float(offset),
+                    entrance_id=entrance.id,
+                    heading_degrees=heading_degrees,
+                    heading_delta_degrees=heading_delta_degrees,
+                    entrance_offset=entrance_offset,
+                    branch_diagnostics=[diagnostic],
+                )
             continue
         # Score-positive branches on front (centerline) and rear (offset) spines,
         # sharing one max_branches budget; connectors are applied per parent spine.
@@ -704,6 +832,18 @@ def _generate_dogleg_for_entrance(
             diagnostic["stall_count"] = layout.stall_count
             diagnostic["graph_valid"] = bool(layout.graph_validation.get("valid", False))
             diagnostic["branch_count"] = 0
+        _record_collected_spine(
+            context_sink,
+            layout,
+            family="dogleg",
+            aisle_lateral_offset=aisle_lateral_offset,
+            dogleg_offset=float(offset),
+            entrance_id=entrance.id,
+            heading_degrees=heading_degrees,
+            heading_delta_degrees=heading_delta_degrees,
+            entrance_offset=entrance_offset,
+            branch_diagnostics=list(branch_diags) if isinstance(branch_diags, list) else [diagnostic],
+        )
         if best is None or score_total(layout) > score_total(best):
             best = layout
             best_diag = [diagnostic]
@@ -724,9 +864,23 @@ def _generate_dogleg_for_entrance(
         finalize_layout,
         layout_valid,
         score_total,
+        aisle_lateral_offset=aisle_lateral_offset,
+        context_sink=context_sink,
     )
     if multi is not None:
         multi_layout, multi_diag = multi
+        _record_collected_spine(
+            context_sink,
+            multi_layout,
+            family="multi_jog",
+            aisle_lateral_offset=aisle_lateral_offset,
+            dogleg_offset=None,
+            entrance_id=entrance.id,
+            heading_degrees=heading_degrees,
+            heading_delta_degrees=heading_delta_degrees,
+            entrance_offset=entrance_offset,
+            branch_diagnostics=[multi_diag] if isinstance(multi_diag, dict) else list(multi_diag or []),
+        )
         if layout_valid(multi_layout) and (
             best is None or score_total(multi_layout) > score_total(best)
         ):
@@ -913,6 +1067,8 @@ def _generate_multi_jog_layout(
     finalize_layout: FinalizeLayout,
     layout_valid: LayoutValid,
     score_total: LayoutScoreTotal,
+    aisle_lateral_offset: float = 0.0,
+    context_sink: list | None = None,
 ) -> tuple[LayoutResult, dict[str, object]] | None:
     plan = _plan_multi_jog_spine(site, available, frame, heading_degrees, start)
     if plan is None:

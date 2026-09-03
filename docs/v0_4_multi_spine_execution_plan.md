@@ -644,8 +644,8 @@ finally {
 - [x] E0：已有基线可复查，未覆盖原有工作与输出。证据：scratch `e0-baseline/`（commit `2e2766ae81d975e042551a24c18c8a1a88056ca1`，301 passed，`examples/phase0_site.json` 三件套 stall_count=83，`engineering_validation.result_scope=official_layout`）；仓库内 gitignored 副本 `output/verification/v0_4/20260902-214041-baseline/`。本步无运行时逻辑改动。
 - [x] E1：19 个现有输入进入 manifest，smoke/full 集合固定，runner 保存成功与失败证据。证据：`benchmarks/layout_v0_4.json`、`tools/benchmark_layouts.py`、`tools/benchmark_case.py`、`tests/test_layout_benchmark.py`；协议测试日志 scratch `e1-pytest.log`；smoke `--profile legacy --subset smoke` 结果 scratch `e1-benchmark/` 与 `output/benchmarks/v0_4/20260902-220518-legacy-smoke/`（6 valid / 4 预期 invalid / 5 次 actual cpsat）。
 - [x] E2：默认依赖与 optimizer 依赖 CI 均有真实执行结果。证据：`.github/workflows/ci.yml` 保留 3.10/3.12 `[dev]` 并新增 3.12 `.[dev,optimizer]` job（显式 import OR-Tools；`OPENPARKCAD_REQUIRE_ORTOOLS=1` 禁止 skip）；本地 optimizer 集 scratch `e2-optimizer-pytest.log`（30 passed, 0 skipped）。远端 GitHub 结论需推送后才可核对，本环境未 push。
-- [ ] E3：候选身份、数据隔离和无发布副作用的评估接口完成。
-- [ ] E4：直线、偏移和已生成的绕障候选在局部择优前保留完整上下文。
+- [x] E3：候选身份、数据隔离和无发布副作用的评估接口完成。证据：`openparkcad/layout_candidates.py`、`openparkcad/layout_evaluation.py`、`tests/test_layout_candidate_context.py`；scratch `e3e4-pytest.log`。
+- [x] E4：直线、偏移和已生成的绕障候选在局部择优前保留完整上下文。证据：`collect_phase1_candidate_contexts` / `collect_layout_candidate_contexts`；同一场地可取得多套完整骨架，legacy `generate_layout` 包装保持原结果。scratch `e3e4-pytest.log`。
 - [ ] E5：Top-K、基线保留、计时和预算状态可解释。
 - [ ] E6：真实几何场地证明旧模板第二名能够在完整优化后胜出。
 - [ ] E7：新开关、Schema、field_support、比较报告和正式输出相互一致。
