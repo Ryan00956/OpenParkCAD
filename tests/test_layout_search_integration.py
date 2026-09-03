@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import json
 from dataclasses import replace
+from pathlib import Path
 
 from openparkcad.cli import _final_layout_errors
 from openparkcad.generator import generate_layout, generate_layout_legacy
-from openparkcad.models import AisleClassSpec, EntranceSpec, SiteSpec, StallSpec
+from openparkcad.models import AisleClassSpec, EntranceSpec, SiteSpec, StallSpec, VehicleSpec, site_from_dict
 from openparkcad.scoring import score_total
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+COMPARISON_EXAMPLE = REPO_ROOT / "examples" / "multi_spine_comparison_site.json"
 
 
 def _aisle_class() -> AisleClassSpec:
@@ -87,69 +92,150 @@ def test_promotion_off_keeps_baseline_official_object() -> None:
     assert multi.layout_search["candidates"]
 
 
-def _t04_site(offsets: list[float], **extra) -> SiteSpec:
+def _t04_comparison_site(**extra) -> SiteSpec:
+    """One site where template ranking keeps a 65-stall spine and module rebuild wins at 67."""
+    perpendicular = StallSpec(id="standard-90", width=2.5, length=5.0, family="perpendicular", allowed_angles=(90.0,))
+    angled = StallSpec(id="angled-60", width=2.5, length=5.5, family="angled", allowed_angles=(60.0,))
     return SiteSpec(
         name="multi-spine-comparison",
-        boundary=[(0, 0), (48, 0), (48, 52), (0, 52)],
-        obstacles=[[(18, 10), (30, 10), (30, 28), (18, 28)]],
-        stall=StallSpec(id="standard-90", width=2.5, length=5.0, family="perpendicular", allowed_angles=(90.0,)),
+        boundary=[(0, 0), (86, 0), (86, 70), (0, 70)],
+        stall=perpendicular,
+        stall_candidates=(perpendicular, angled),
         aisle_width=6.0,
         margin=0.0,
-        entrances=[EntranceSpec(id="main", mode="shared", center=(24, 0), width=8.0, heading_degrees=90.0)],
+        vehicle=VehicleSpec(
+            id="passenger-car",
+            length=4.8,
+            width=1.9,
+            wheelbase=2.8,
+            min_turning_radius=5.5,
+            turning_radius_reference="outer_front_wheel",
+            track_width=1.6,
+            front_overhang=1.0,
+            rear_overhang=1.0,
+        ),
+        constraints={
+            "maneuvering": {
+                "require_turning_radius_check": True,
+                "require_swept_path_check": False,
+                "max_reverse_distance": 12.0,
+            }
+        },
+        entrances=[EntranceSpec(id="main", mode="shared", center=(43, 0), width=8.0, heading_degrees=90.0)],
         aisle_classes=[_aisle_class()],
         fixed_aisle_class="wide-two-way-no-cross",
         optimization={
             "heading_deltas_degrees": [0],
             "entrance_offsets": [0],
-            "enable_connectors": False,
             "enable_branches": True,
-            "max_branches": 2,
+            "max_branches": 1,
             "branch_sides": ["left"],
+            "branch_start_positions": [24, 42, 60],
+            "enable_connectors": False,
             "enable_t_end_caps": False,
-            "prefer_obstacle_clearance": True,
-            "enable_main_aisle_dogleg": True,
-            "auto_lateral_offsets_for_obstacles": False,
-            "enable_adaptive_dogleg_offsets": False,
-            "dogleg_offsets": offsets,
+            "main_aisle_lateral_offsets": [0.0, 6.0],
             "promote_candidate_layout_preview": True,
             "selector_backend": "greedy",
-            "layout_search": {"mode": "multi_spine", "top_k": 4, "refinement_budget_seconds": 30.0},
+            "layout_search": {"mode": "multi_spine", "top_k": 4, "refinement_budget_seconds": 20.0},
+            "weights": {"stall_count": 100, "aisle_area": 0, "dead_end_length": 0, "branch_count": 0},
             **extra,
         },
     )
 
 
+def _assert_official_checks_executed(layout) -> None:
+    graph = layout.graph_validation if isinstance(layout.graph_validation, dict) else {}
+    maneuver = layout.maneuver_validation if isinstance(layout.maneuver_validation, dict) else {}
+    vehicle = maneuver.get("vehicle_validation") if isinstance(maneuver.get("vehicle_validation"), dict) else {}
+    site = layout.site_constraint_validation if isinstance(layout.site_constraint_validation, dict) else {}
+    engineering = layout.engineering_validation if isinstance(layout.engineering_validation, dict) else {}
+    operational = layout.operational_quality if isinstance(layout.operational_quality, dict) else {}
+    quota = site.get("quota") if isinstance(site.get("quota"), dict) else {}
+    rules = engineering.get("rules") if isinstance(engineering.get("rules"), dict) else {}
+    active = rules.get("active") if isinstance(rules.get("active"), list) else []
+    requested = vehicle.get("requested") if isinstance(vehicle.get("requested"), dict) else {}
+    vehicle_checks = vehicle.get("checks") if isinstance(vehicle.get("checks"), list) else []
+
+    assert graph.get("valid") is True
+    assert isinstance(graph.get("errors"), list)
+    assert int(graph.get("node_count") or 0) > 0
+    assert int(graph.get("edge_count") or 0) > 0
+    assert int(graph.get("stall_access_count") or 0) > 0
+
+    assert maneuver.get("valid") is True
+    assert int(maneuver.get("checked_stalls") or 0) > 0
+
+    assert vehicle.get("valid") is True
+    assert int(vehicle.get("checked_stalls") or 0) > 0
+    assert requested.get("turning_radius") is True
+    assert len(vehicle_checks) > 0
+
+    assert site.get("valid") is True
+    assert "conflicts" in site
+    assert quota.get("valid") is True
+
+    assert engineering.get("valid") is True
+    assert engineering.get("result_scope") == "official_layout"
+    assert active
+    assert "vehicle.turning_radius" in {item.get("id") for item in active if isinstance(item, dict)}
+
+    assert operational.get("valid") is True
+    assert operational.get("version")
+
+
+def _assert_official_candidate_checks_executed(layout, *, expected_backend: str | None = None) -> None:
+    search = layout.layout_search if isinstance(layout.layout_search, dict) else {}
+    publication = search.get("publication") if isinstance(search.get("publication"), dict) else {}
+    winner_id = publication.get("official_candidate_id")
+    candidates = search.get("candidates") if isinstance(search.get("candidates"), list) else []
+    winner = next((item for item in candidates if item.get("candidate_id") == winner_id), None)
+    assert winner is not None
+    checks = winner.get("checks") if isinstance(winner.get("checks"), dict) else {}
+    for key in ("graph", "maneuver", "vehicle", "site_quota", "engineering", "operational"):
+        block = checks.get(key) if isinstance(checks.get(key), dict) else {}
+        assert block.get("executed") is True, key
+        assert block.get("valid") is True, key
+    assert winner.get("used_template") is False
+    if expected_backend is not None:
+        assert winner.get("actual_backend") == expected_backend
+    assert int(winner.get("stall_count") or 0) == layout.stall_count
+
+
 def test_t04_second_template_spine_wins_after_official_rebuild() -> None:
-    from openparkcad.generator import collect_layout_candidate_contexts, generate_layout_legacy
-    from openparkcad.layout_evaluation import evaluate_layout_candidate
-    from openparkcad.layout_search import search_multi_spine
+    site = _t04_comparison_site()
+    assert site.optimization["selector_backend"] == "greedy"
+    legacy = generate_layout_legacy(site)
+    multi = generate_layout(site)
 
-    full = _t04_site([-12.9, -9.9])
-    weak = _t04_site([-9.9])
-    baseline = generate_layout_legacy(weak)
-    assert baseline.stall_count > 0
-    assert not _final_layout_errors(baseline)
+    assert not _final_layout_errors(legacy)
+    assert not _final_layout_errors(multi)
+    publication = multi.layout_search["publication"]
+    assert publication["replaced"] is True
+    assert publication["reason"] == "higher_scoring_verified_candidate"
+    assert score_total(multi) > score_total(legacy)
+    assert multi.stall_count > legacy.stall_count
+    assert tuple(stall.id for stall in multi.stalls) != tuple(stall.id for stall in legacy.stalls)
+    assert _geometry_key(multi) != _geometry_key(legacy)
+    _assert_official_checks_executed(multi)
+    _assert_official_candidate_checks_executed(multi, expected_backend="greedy")
+    official_ids = {aisle.id for aisle in multi.aisles}
+    assert all(stall.served_by_aisle_id in official_ids or stall.served_by_aisle_id is None for stall in multi.stalls)
+    assert multi.layout_search["quality_delta"]["score_delta"] > 0
 
-    result = search_multi_spine(
-        full,
-        collect_fn=collect_layout_candidate_contexts,
-        evaluate_fn=evaluate_layout_candidate,
-        legacy_fn=lambda _site: baseline,
-    )
-    assert result.layout_search["publication"]["replaced"] is True
-    assert result.layout_search["publication"]["reason"] == "higher_scoring_verified_candidate"
-    assert _geometry_key(result) != _geometry_key(baseline)
-    assert score_total(result) > score_total(baseline)
-    assert not _final_layout_errors(result)
-    checks = result.graph_validation, result.maneuver_validation, result.site_constraint_validation
-    assert all(block.get("valid") is True for block in checks)
-    assert result.engineering_validation.get("result_scope") == "official_layout"
-    assert result.engineering_validation.get("valid") is True
-    assert result.operational_quality.get("valid") is True
-    assert result.graph_validation.get("errors") == [] or result.graph_validation.get("executed", True)
-    assert result.aisles and result.stalls
-    official_ids = {aisle.id for aisle in result.aisles}
-    assert all(stall.served_by_aisle_id in official_ids or stall.served_by_aisle_id is None for stall in result.stalls)
+
+def test_example_multi_spine_comparison_site_promotes_on_generate_layout() -> None:
+    payload = json.loads(COMPARISON_EXAMPLE.read_text(encoding="utf-8"))
+    site = site_from_dict(payload)
+    assert site.optimization.get("layout_search", {}).get("mode") == "multi_spine"
+    assert site.optimization.get("selector_backend") == "cpsat"
+    legacy = generate_layout_legacy(site)
+    multi = generate_layout(site)
+    assert multi.layout_search["mode"] == "multi_spine"
+    assert multi.layout_search["publication"]["replaced"] is True
+    assert score_total(multi) > score_total(legacy)
+    assert tuple(stall.id for stall in multi.stalls) != tuple(stall.id for stall in legacy.stalls)
+    _assert_official_checks_executed(multi)
+    _assert_official_candidate_checks_executed(multi, expected_backend="cpsat")
 
 
 def test_t06_baseline_keeps_local_promotion_gains() -> None:
