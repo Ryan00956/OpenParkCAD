@@ -206,6 +206,7 @@ class LayoutResult:
     candidate_layout_preview: dict[str, Any] = field(default_factory=dict)
     candidate_layout_promotion: dict[str, Any] = field(default_factory=dict)
     unsupported_phase1_inputs: list[dict[str, str]] = field(default_factory=list)
+    layout_search: dict[str, Any] = field(default_factory=dict)
 
     @property
     def stall_count(self) -> int:

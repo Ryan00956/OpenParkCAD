@@ -32,6 +32,15 @@ def collect_layout_candidate_contexts(site: SiteSpec) -> list[LayoutCandidateCon
 
 
 def generate_layout(site: SiteSpec) -> LayoutResult:
+    from openparkcad.layout_search import read_layout_search, search_multi_spine
+
+    config = read_layout_search(site)
+    if config.mode == "multi_spine":
+        return search_multi_spine(site, config)
+    return generate_layout_legacy(site)
+
+
+def generate_layout_legacy(site: SiteSpec) -> LayoutResult:
     candidates = _candidate_stalls(site)
     assignments = _candidate_stall_assignments(site)
     if len(assignments) <= 1:

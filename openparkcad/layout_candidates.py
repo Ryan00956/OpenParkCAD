@@ -8,7 +8,15 @@ import json
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-from openparkcad.models import CandidateObject, LayoutResult, ParkingAisle, ParkingStall, SiteSpec, StallSpec
+from openparkcad.models import (
+    AngleAttempt,
+    CandidateObject,
+    LayoutResult,
+    ParkingAisle,
+    ParkingStall,
+    SiteSpec,
+    StallSpec,
+)
 
 SPINE_ROLES = frozenset({"main", "jog", "turnaround", "exit", "passing_bay"})
 
@@ -24,6 +32,7 @@ class LayoutCandidateContext:
     collect_status: str = "collected"
     reject_reason: str | None = None
     spine_payload: dict[str, Any] = field(default_factory=dict)
+    retain_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -41,6 +50,9 @@ class LayoutCandidateEvaluation:
     failure_class: str | None
     used_template: bool
     provenance: dict[str, Any] = field(default_factory=dict)
+    selection: dict[str, Any] = field(default_factory=dict)
+    template_score_total: float | None = None
+    retain_reason: str | None = None
 
 
 def canonical_dumps(value: Any) -> str:
@@ -134,6 +146,7 @@ def copy_layout(layout: LayoutResult, *, site: SiteSpec | None = None) -> Layout
         candidate_layout_preview=copy.deepcopy(dict(layout.candidate_layout_preview)),
         candidate_layout_promotion=copy.deepcopy(dict(layout.candidate_layout_promotion)),
         unsupported_phase1_inputs=copy.deepcopy(list(layout.unsupported_phase1_inputs)),
+        layout_search=copy.deepcopy(dict(getattr(layout, "layout_search", {}) or {})),
     )
 
 
@@ -210,16 +223,34 @@ def context_from_layout(
     payload = spine_payload(isolated_layout, record)
     spine_id = make_spine_id(payload)
     candidate_id = make_candidate_id(spine_id, stall_assignment_payload(isolated_site))
-    isolated_layout = replace(
-        isolated_layout,
-        attempts=list(isolated_layout.attempts),
-    )
+    diagnostics = copy.deepcopy(list(branch_diagnostics or []))
+    if diagnostics and not isolated_layout.attempts:
+        isolated_layout = replace(
+            isolated_layout,
+            attempts=[
+                AngleAttempt(
+                    angle_degrees=isolated_layout.selected_heading_degrees or isolated_layout.selected_angle_degrees,
+                    stall_count=isolated_layout.stall_count,
+                    entrance_id=isolated_layout.main_entrance_id,
+                    heading_delta_degrees=isolated_layout.selected_heading_delta_degrees,
+                    entrance_offset=isolated_layout.selected_entrance_offset,
+                    branch_side=isolated_layout.selected_branch_side,
+                    branch_start_u=isolated_layout.selected_branch_start_u,
+                    branch_length=isolated_layout.selected_branch_length,
+                    branch_candidates=diagnostics,
+                    graph_valid=bool(isolated_layout.graph_validation.get("valid", False)),
+                    graph_errors=list(isolated_layout.graph_validation.get("errors", [])),
+                )
+            ],
+        )
+    else:
+        isolated_layout = replace(isolated_layout, attempts=list(isolated_layout.attempts))
     return LayoutCandidateContext(
         candidate_id=candidate_id,
         spine_id=spine_id,
         site=isolated_site,
         template_layout=isolated_layout,
-        branch_diagnostics=copy.deepcopy(list(branch_diagnostics or [])),
+        branch_diagnostics=diagnostics,
         source=copy.deepcopy(record),
         collect_status=collect_status,
         reject_reason=reject_reason,

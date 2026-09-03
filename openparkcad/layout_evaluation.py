@@ -27,14 +27,25 @@ from openparkcad.site_constraints import validate_site_constraints
 from openparkcad.traffic_graph import build_traffic_graph, validate_traffic_graph
 
 
-def evaluate_layout_candidate(context: LayoutCandidateContext) -> LayoutCandidateEvaluation:
+def evaluate_layout_candidate(
+    context: LayoutCandidateContext,
+    *,
+    selector_time_limit_seconds: float | None = None,
+) -> LayoutCandidateEvaluation:
     """Run catalog → selector → preview → official rebuild → checks → score.
 
     Returns data only. Does not write files, mutate the input context, or call
     ``generate_layout``.
     """
     started = time.perf_counter()
-    layout = copy_layout(context.template_layout, site=context.site)
+    site = context.site
+    if selector_time_limit_seconds is not None:
+        optimization = dict(site.optimization)
+        optimization["selector_time_limit_seconds"] = float(selector_time_limit_seconds)
+        site = replace(site, optimization=optimization)
+    layout = copy_layout(context.template_layout, site=site)
+    template = _revalidate_candidate(copy_layout(context.template_layout, site=site), context.candidate_id)
+    template_score = score_total(template) if template.score else None
     objects = build_candidate_objects(layout)
     selection = select_candidate_objects(objects, layout.site)
     enriched = replace(layout, candidate_objects=objects, candidate_selection=selection)
@@ -54,8 +65,18 @@ def evaluate_layout_candidate(context: LayoutCandidateContext) -> LayoutCandidat
         used_template = False
     except Exception as exc:
         failure_class = f"rebuild_failed:{type(exc).__name__}"
-        rebuilt = _revalidate_candidate(copy_layout(context.template_layout, site=context.site), context.candidate_id)
+        rebuilt = template
         used_template = True
+
+    if rebuilt is not None and not used_template:
+        selector_better = _finite_score(rebuilt.score) and (
+            template_score is None
+            or not _layout_has_minimum(template)
+            or float(rebuilt.score.get("total", 0.0)) > float(template_score)
+        )
+        if not selector_better:
+            rebuilt = template
+            used_template = True
 
     score = dict(rebuilt.score) if rebuilt is not None and rebuilt.score else None
     if rebuilt is not None and not _finite_score(score):
@@ -75,7 +96,13 @@ def evaluate_layout_candidate(context: LayoutCandidateContext) -> LayoutCandidat
         failure_class=failure_class,
         used_template=used_template,
         provenance=dict(selection.get("solver_provenance") or {}),
+        selection=dict(selection),
+        template_score_total=template_score,
     )
+
+
+def _layout_has_minimum(layout: LayoutResult) -> bool:
+    return layout.stall_count > 0 and bool(layout.aisles)
 
 
 def _revalidate_candidate(layout: LayoutResult, candidate_id: str) -> LayoutResult:

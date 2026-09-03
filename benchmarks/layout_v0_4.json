@@ -137,6 +137,14 @@
       "required_checks": ["graph", "maneuver", "site", "engineering", "operational"]
     },
     {
+      "case_id": "multi-spine-comparison",
+      "path": "examples/multi_spine_comparison_site.json",
+      "provenance": "synthetic",
+      "tags": ["multi_spine", "dogleg", "comparison"],
+      "expectation": "valid_with_required_checks",
+      "required_checks": ["graph", "maneuver", "site", "engineering", "operational"]
+    },
+    {
       "case_id": "irregular-courtyard",
       "path": "tests/fixtures/v0_3/irregular_courtyard_pass.json",
       "provenance": "synthetic",

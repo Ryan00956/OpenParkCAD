@@ -1,0 +1,93 @@
+{
+  "version": "0.3",
+  "name": "multi-spine comparison site",
+  "units": "m",
+  "standards": {
+    "jurisdiction": "unspecified",
+    "standard_profile": "project-policy-only",
+    "strictness": "conservative",
+    "notes": "Synthetic site: several dogleg offsets are generated; multi_spine search compares them after official rebuild."
+  },
+  "site": {
+    "boundary": {
+      "type": "polygon",
+      "points": [[0, 0], [48, 0], [48, 52], [0, 52]]
+    },
+    "obstacles": [
+      {
+        "id": "mid-block",
+        "type": "building",
+        "geometry": {
+          "type": "polygon",
+          "points": [[18, 10], [30, 10], [30, 28], [18, 28]]
+        },
+        "clearance": 0.5,
+        "affects": ["stall", "aisle", "swept_path"],
+        "authority": "project_policy",
+        "priority": "hard"
+      }
+    ]
+  },
+  "entrances": [
+    {
+      "id": "main",
+      "mode": "shared",
+      "center": [24, 0],
+      "width": 8.0,
+      "heading_degrees": 90,
+      "allowed_movements": ["enter", "exit"]
+    }
+  ],
+  "parking": {
+    "stall_types": [
+      {
+        "id": "standard-90",
+        "family": "perpendicular",
+        "width": 2.5,
+        "length": 5.0,
+        "allowed_angles": [90]
+      }
+    ]
+  },
+  "aisles": {
+    "selection_mode": "fixed",
+    "fixed_class": "wide-two-way-no-cross",
+    "classes": [
+      {
+        "id": "wide-two-way-no-cross",
+        "width": 6.0,
+        "capacity": "two_vehicle",
+        "directionality": "two_way"
+      }
+    ]
+  },
+  "constraints": {
+    "setbacks": {"site_boundary": 0.0},
+    "maneuvering": {
+      "require_turning_radius_check": false,
+      "require_swept_path_check": false
+    }
+  },
+  "optimization": {
+    "heading_deltas_degrees": [0],
+    "entrance_offsets": [0],
+    "enable_branches": false,
+    "enable_connectors": false,
+    "enable_t_end_caps": false,
+    "prefer_obstacle_clearance": true,
+    "enable_main_aisle_dogleg": true,
+    "auto_lateral_offsets_for_obstacles": false,
+    "dogleg_offsets": [22, -22, 12, -12],
+    "promote_candidate_layout_preview": true,
+    "selector_backend": "cpsat",
+    "selector_seed": 17,
+    "selector_time_limit_seconds": 2.0,
+    "selector_num_workers": 1,
+    "layout_search": {
+      "mode": "multi_spine",
+      "top_k": 4,
+      "refinement_budget_seconds": 10.0
+    },
+    "operational_quality_mode": "score_only"
+  }
+}
