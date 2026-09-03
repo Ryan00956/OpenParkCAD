@@ -10,6 +10,7 @@ import tempfile
 from collections.abc import Callable
 from typing import Any
 
+from openparkcad import __version__
 from openparkcad.candidate_layout_preview import candidate_layout_preview_report
 from openparkcad.candidate_network_preview import candidate_network_preview_report
 from openparkcad.candidate_snapshot import candidate_snapshot_report
@@ -17,12 +18,14 @@ from openparkcad.diagnostics import build_input_diagnostics
 from openparkcad.exporter_dxf import write_dxf
 from openparkcad.exporter_svg import write_svg
 from openparkcad.generator import generate_layout
+from openparkcad.layout_search import layout_search_report
 from openparkcad.models import site_from_dict
 from openparkcad.traffic_graph import traffic_graph_report
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="openparkcad")
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     solve_parser = subparsers.add_parser("solve", help="Generate a parking layout for a site JSON file.")
@@ -87,11 +90,17 @@ def _write_report(layout, path: str | Path) -> None:
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     data = {
+        "report_contract_version": "openparkcad-report-0.3",
+        "package_version": __version__,
         "site": layout.site.name,
         "stall_count": layout.stall_count,
         "aisle_count": len(layout.aisles),
         "generation_mode": layout.generation_mode,
         "main_entrance_id": layout.main_entrance_id,
+        "exit_entrance_id": next(
+            (aisle.connected_to_entrance_id for aisle in layout.aisles if aisle.role == "exit" and aisle.connected_to_entrance_id),
+            None,
+        ),
         "selected_angle_degrees": layout.selected_angle_degrees,
         "selected_heading_degrees": layout.selected_heading_degrees,
         "selected_heading_delta_degrees": layout.selected_heading_delta_degrees,
@@ -113,18 +122,26 @@ def _write_report(layout, path: str | Path) -> None:
         "candidate_layout_preview": candidate_layout_preview_report(layout),
         "candidate_layout_promotion": layout.candidate_layout_promotion,
         "maneuver_validation": layout.maneuver_validation,
+        "site_constraint_validation": getattr(layout, "site_constraint_validation", {}),
+        "engineering_validation": getattr(layout, "engineering_validation", {}),
         "operational_quality": layout.operational_quality,
         "unsupported_phase1_inputs": layout.unsupported_phase1_inputs,
         "aisles": [
             {
                 "id": aisle.id,
                 "role": aisle.role,
+                "directionality": aisle.directionality,
                 "connected_to_entrance_id": aisle.connected_to_entrance_id,
                 "parent_aisle_id": aisle.parent_aisle_id,
                 "connected_aisle_ids": list(aisle.connected_aisle_ids),
             }
             for aisle in layout.aisles
         ],
+        "aisle_directionality": (
+            layout.graph_validation.get("aisle_directionality")
+            if isinstance(layout.graph_validation, dict)
+            else None
+        ),
         "stalls": [
             {
                 "id": stall.id,
@@ -150,13 +167,11 @@ def _write_report(layout, path: str | Path) -> None:
             }
             for attempt in layout.attempts
         ],
-        "stall": {
-            "id": layout.site.stall.id,
-            "family": layout.site.stall.family,
-            "width": layout.site.stall.width,
-            "length": layout.site.stall.length,
-            "allowed_angles": list(layout.site.stall.allowed_angles),
-        },
+        "stall": _stall_spec_report(layout.site.stall),
+        "stall_types": [
+            _stall_spec_report(stall)
+            for stall in (layout.site.stall_candidates or (layout.site.stall,))
+        ],
         "stall_assignment": {
             "main": _stall_spec_report(layout.site.main_stall or layout.site.stall),
             "branch": _stall_spec_report(layout.site.branch_stall or layout.site.main_stall or layout.site.stall),
@@ -165,6 +180,7 @@ def _write_report(layout, path: str | Path) -> None:
         "aisle_width": layout.site.aisle_width,
         "traffic_graph": traffic_graph_report(layout),
         "input_diagnostics": build_input_diagnostics(layout.site, layout),
+        "layout_search": layout_search_report(layout),
     }
     target.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
@@ -184,6 +200,22 @@ def _final_layout_errors(layout) -> list[str]:
         invalid_count = len(maneuver_validation.get("invalid_stalls", []))
         errors.append(
             f"maneuver validation failed{f' ({invalid_count} invalid stalls)' if invalid_count else ''}"
+        )
+
+    site_constraint_validation = getattr(layout, "site_constraint_validation", {"valid": True})
+    if not site_constraint_validation.get("valid", False):
+        site_errors = site_constraint_validation.get("errors", [])
+        errors.append(
+            "site constraint validation failed"
+            f"{f' ({len(site_errors)} errors)' if isinstance(site_errors, list) and site_errors else ''}"
+        )
+
+    engineering_validation = getattr(layout, "engineering_validation", {})
+    if engineering_validation and not engineering_validation.get("valid", False):
+        failed_rules = engineering_validation.get("rules", {}).get("failed", [])
+        errors.append(
+            "engineering validation failed"
+            f"{f' ({len(failed_rules)} failed rules)' if isinstance(failed_rules, list) and failed_rules else ''}"
         )
 
     operational_quality = layout.operational_quality
@@ -267,6 +299,11 @@ def _stall_spec_report(stall) -> dict[str, object]:
         "width": stall.width,
         "length": stall.length,
         "allowed_angles": list(stall.allowed_angles),
+        "classifications": list(stall.classifications),
+        "fixed_features": list(stall.fixed_features),
+        "drive_over": stall.drive_over,
+        "access_sides": list(stall.access_sides),
+        "blocked_sides": list(stall.blocked_sides),
     }
 
 
