@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import json
 import os
 from pathlib import Path
@@ -7,12 +8,14 @@ from pathlib import Path
 from openparkcad.layout_benchmark import (
     EXPECTED_CASE_COUNT,
     MANIFEST_VERSION,
+    NOT_AVAILABLE,
     apply_optimization_overlay,
     benchmark_exit_code,
     load_manifest,
     run_benchmark,
     sha256_file,
 )
+from tests.ortools_util import require_ortools
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 OFFICIAL_MANIFEST = REPO_ROOT / "benchmarks" / "layout_v0_4.json"
@@ -41,7 +44,7 @@ def _case(case_id: str, rel_path: str, expectation: str, required_checks: list[s
     }
 
 
-def test_official_manifest_lists_nineteen_explicit_existing_inputs() -> None:
+def test_official_manifest_lists_all_explicit_existing_inputs() -> None:
     manifest = load_manifest(OFFICIAL_MANIFEST, repo_root=REPO_ROOT, expected_case_count=EXPECTED_CASE_COUNT)
     assert manifest["version"] == MANIFEST_VERSION
     assert len(manifest["cases"]) == EXPECTED_CASE_COUNT
@@ -235,6 +238,36 @@ def test_cpsat_greedy_fallback_is_evidence_not_success_sample(tmp_path: Path) ->
     assert payload["summary"]["cpsat_fallback_count"] == 1
     assert payload["summary"]["comparison_incomplete"] is True
     assert benchmark_exit_code(payload) != 0
+
+
+def test_multi_benchmark_records_measured_costs_and_actual_solver_controls(tmp_path: Path) -> None:
+    require_ortools()
+    manifest_path = _mini_manifest(
+        tmp_path / "mini.json",
+        [_case("tiny-valid", TINY_VALID, "valid_with_required_checks", ["graph", "site", "engineering"])],
+    )
+    out = tmp_path / "run"
+    run = run_benchmark(
+        manifest_path=manifest_path, profile="multi", subset="full", repeats=1,
+        timeout_seconds=30.0, out_dir=out, repo_root=REPO_ROOT, variant_filter=("multi-cpsat",),
+    )
+    assert benchmark_exit_code(run) == 0
+    case_dir = out / "cases/tiny-valid/multi-cpsat/1"
+    result = json.loads((case_dir / "result.json").read_text(encoding="utf-8"))
+    report = json.loads((case_dir / "report.json").read_text(encoding="utf-8"))
+    assert result["backend"]["actual_backend"] == "cpsat"
+    assert result["backend"]["selector_seed"] == 17
+    assert result["backend"]["selector_num_workers"] == 1
+    assert result["backend"]["selector_time_limit_seconds"] == 2.0
+    budget = report["layout_search"]["budget"]
+    assert result["cost"]["baseline_seconds"] == budget["baseline_seconds"] > 0
+    assert result["cost"]["refinement_seconds"] == budget["elapsed_seconds"] >= 0
+    assert result["cost"]["collect_seconds"] == budget["collect_seconds"] == 0
+    assert result["cost"]["rebuild_seconds"] == NOT_AVAILABLE
+    with (out / "summary.csv").open(encoding="utf-8", newline="") as handle:
+        row = next(csv.DictReader(handle))
+    assert float(row["baseline_seconds"]) == budget["baseline_seconds"]
+    assert float(row["refinement_seconds"]) == budget["elapsed_seconds"]
 
 
 def test_tools_scripts_invoke_shipped_runner(tmp_path: Path) -> None:

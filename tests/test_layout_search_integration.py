@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from openparkcad.candidate_snapshot import candidate_snapshot_report
-from openparkcad.cli import _final_layout_errors
+from openparkcad.cli import _final_layout_errors, _write_output_set
 from openparkcad.generator import collect_layout_candidate_contexts, generate_layout, generate_layout_legacy
 from openparkcad.layout_search import match_baseline_context
 from openparkcad.models import AisleClassSpec, EntranceSpec, SiteSpec, StallSpec, VehicleSpec, site_from_dict
@@ -255,7 +255,7 @@ def test_baseline_match_uses_spine_geometry_not_shared_aisle_ids() -> None:
     assert float(winners[0]["aisle_lateral_offset"]) == 0.0
 
 
-def test_promoted_official_layout_keeps_original_selection_evidence() -> None:
+def test_promoted_official_layout_keeps_original_selection_evidence(tmp_path: Path) -> None:
     site = _t04_comparison_site()
     multi = generate_layout(site)
     assert multi.layout_search["publication"]["replaced"] is True
@@ -271,6 +271,8 @@ def test_promoted_official_layout_keeps_original_selection_evidence() -> None:
     with patch("openparkcad.candidate_snapshot.select_candidate_objects") as mocked:
         mocked.side_effect = AssertionError("report must serialize the stored selection")
         snapshot = candidate_snapshot_report(multi)
+        _write_output_set(multi, tmp_path / "layout.dxf", tmp_path / "layout.svg", tmp_path / "report.json")
+        assert mocked.call_count == 0
     assert snapshot["selection"]["selected_ids"] == stored_ids
     assert snapshot["selection"].get("solver_provenance") == selection.get("solver_provenance")
     winner = next(
@@ -280,6 +282,30 @@ def test_promoted_official_layout_keeps_original_selection_evidence() -> None:
     )
     assert winner.get("selected_ids") == stored_ids
     assert winner.get("solver_provenance") == selection.get("solver_provenance")
+    payload = json.loads((tmp_path / "report.json").read_text(encoding="utf-8"))
+    promotion = payload["candidate_layout_promotion"]
+    assert promotion["status"] == "promoted"
+    assert promotion["official_output_replaced"] is True
+    assert promotion["pre_promotion_selected_ids"] == stored_ids
+    assert promotion["pre_promotion_solver_provenance"] == selection["solver_provenance"]
+    assert set(promotion["candidate_to_official_aisle_ids"].values()) == official_ids
+    assert set(promotion["preview_to_official_aisle_ids"].values()) == official_ids
+    assert set(promotion["preview_to_official_stall_ids"].values()) == {stall.id for stall in multi.stalls}
+    by_stall_id = {stall.id: stall for stall in multi.stalls}
+    for preview in payload["candidate_layout_preview"]["stalls"]:
+        official = by_stall_id[promotion["preview_to_official_stall_ids"][preview["id"]]]
+        assert [list(point) for point in official.polygon] == preview["geometry"]
+        assert official.served_by_aisle_id == promotion["preview_to_official_aisle_ids"][preview["served_by_aisle_id"]]
+    for field in ("candidate_network_preview", "candidate_layout_preview"):
+        assert payload[field]["status"] == "promoted_to_official"
+        assert payload[field]["official_output_replaced"] is True
+        assert set(payload[field]["official_aisle_ids"]) == official_ids
+    preview = payload["candidate_layout_preview"]
+    assert preview["score"] == payload["score"]
+    assert preview["validation"]["status"] == "official"
+    for field in ("maneuver_validation", "site_constraint_validation", "engineering_validation", "operational_quality"):
+        assert preview["validation"][field] == payload[field]
+    assert payload["input_diagnostics"]["field_support"]["optimization.promote_candidate_layout_preview"] == "active"
 
 
 def test_t04_second_template_spine_wins_after_official_rebuild() -> None:

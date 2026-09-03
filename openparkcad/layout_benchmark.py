@@ -34,6 +34,7 @@ EXPECTED_CASE_COUNT = 20
 OUTCOMES = ("valid", "invalid", "input_error", "exception", "timeout")
 
 QUALITY_PROMOTION_OVERLAY = {"promote_candidate_layout_preview": True}
+SOLVER_CONTROL_OVERLAY = {"selector_seed": 17, "selector_num_workers": 1, "selector_time_limit_seconds": 2.0}
 
 PROFILE_VARIANT_SPECS: dict[str, tuple[tuple[str, dict[str, Any]], ...]] = {
     "legacy": (
@@ -145,6 +146,7 @@ def profile_variants(profile: str, *, variant_filter: tuple[str, ...] = (), keep
         if allowed and variant_id not in allowed:
             continue
         merged = copy.deepcopy(overlay)
+        merged.update(SOLVER_CONTROL_OVERLAY)
         if not keep_original_promotion:
             merged.update(QUALITY_PROMOTION_OVERLAY)
         variants.append(BenchmarkVariant(variant_id=variant_id, optimization_overlay=merged))
@@ -415,6 +417,20 @@ def search_fields(layout: LayoutResult | None) -> dict[str, Any]:
     }
 
 
+def cost_fields(layout: LayoutResult | None, duration_seconds: float | None) -> dict[str, Any]:
+    search = getattr(layout, "layout_search", None)
+    budget = search.get("budget") if isinstance(search, dict) else None
+    budget = budget if isinstance(budget, dict) else {}
+    return {
+        "total_seconds": _finite_or_na(duration_seconds),
+        "baseline_seconds": _finite_or_na(budget.get("baseline_seconds")),
+        "refinement_seconds": _finite_or_na(budget.get("elapsed_seconds")),
+        "collect_seconds": _finite_or_na(budget.get("collect_seconds")),
+        # Rebuild is included in refinement; it has no independent timer yet.
+        "rebuild_seconds": NOT_AVAILABLE,
+    }
+
+
 def classify_expectation(case: dict[str, Any], outcome: str, payload: dict[str, Any]) -> bool:
     expectation = case.get("expectation")
     if outcome in {"timeout", "exception", "input_error"}:
@@ -525,12 +541,7 @@ def build_result_payload(
             **metrics,
         },
         "checks": checks,
-        "cost": {
-            "total_seconds": _finite_or_na(duration_seconds),
-            "baseline_seconds": NOT_AVAILABLE,
-            "refinement_seconds": NOT_AVAILABLE,
-            "rebuild_seconds": NOT_AVAILABLE,
-        },
+        "cost": cost_fields(layout, duration_seconds),
         "search": search_fields(layout),
         "error": error,
         "publication_errors": _final_layout_errors(layout) if layout is not None and outcome != "valid" else [],
@@ -983,6 +994,10 @@ def _write_summary_csv(path: Path, records: list[BenchmarkRunRecord]) -> None:
         "aisle_area",
         "score_total",
         "total_seconds",
+        "baseline_seconds",
+        "refinement_seconds",
+        "collect_seconds",
+        "rebuild_seconds",
         "result_scope",
         "source_input_mutated",
         "case_dir",
@@ -1012,6 +1027,10 @@ def _write_summary_csv(path: Path, records: list[BenchmarkRunRecord]) -> None:
                     "aisle_area": final_result.get("aisle_area"),
                     "score_total": final_result.get("score_total"),
                     "total_seconds": cost.get("total_seconds"),
+                    "baseline_seconds": cost.get("baseline_seconds", NOT_AVAILABLE),
+                    "refinement_seconds": cost.get("refinement_seconds", NOT_AVAILABLE),
+                    "collect_seconds": cost.get("collect_seconds", NOT_AVAILABLE),
+                    "rebuild_seconds": cost.get("rebuild_seconds", NOT_AVAILABLE),
                     "result_scope": record.result.get("result_scope"),
                     "source_input_mutated": identity.get("source_input_mutated"),
                     "case_dir": record.case_dir,

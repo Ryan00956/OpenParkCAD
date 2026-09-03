@@ -97,6 +97,18 @@ def attach_official_selection_evidence(source: LayoutResult, official: LayoutRes
     )
 
 
+def finalize_official_selection_evidence(layout: LayoutResult) -> LayoutResult:
+    """Publish stored selector evidence after a rebuilt candidate wins search."""
+    if layout.generation_mode != "candidate_layout_promoted":
+        return layout
+    promoted = replace(
+        layout,
+        candidate_network_preview=_promoted_network_preview(layout, layout),
+        candidate_layout_preview=_promoted_layout_preview(layout, layout),
+    )
+    return replace(promoted, candidate_layout_promotion=_promotion_report(promoted, "promoted", selection_source=layout))
+
+
 def _maybe_promote_candidate_layout(layout: LayoutResult) -> LayoutResult:
     if not layout.site.optimization.get("promote_candidate_layout_preview", False):
         return replace(layout, candidate_layout_promotion=_promotion_report(layout, "not_requested"))
@@ -128,10 +140,10 @@ def _maybe_promote_candidate_layout(layout: LayoutResult) -> LayoutResult:
         candidate_selection=official_selection,
         selected_branches=_catalog_selected_branches(layout, promoted),
         selected_connectors=_catalog_selected_connectors(layout, promoted),
-        candidate_network_preview=_promoted_network_preview(layout),
+        candidate_network_preview=_promoted_network_preview(layout, promoted),
         candidate_layout_preview=_promoted_layout_preview(layout, promoted),
     )
-    return replace(promoted, candidate_layout_promotion=_promotion_report(promoted, "promoted"))
+    return replace(promoted, candidate_layout_promotion=_promotion_report(promoted, "promoted", selection_source=layout))
 
 
 def rebuild_official_layout_from_selection(source: LayoutResult, preview: LayoutResult) -> LayoutResult:
@@ -230,11 +242,11 @@ def _official_stalls(stalls: list[ParkingStall]) -> list[ParkingStall]:
     return [replace(stall, id=f"P-{index:03d}") for index, stall in enumerate(stalls, start=1)]
 
 
-def _promoted_network_preview(source: LayoutResult) -> dict[str, object]:
+def _promoted_network_preview(source: LayoutResult, official: LayoutResult) -> dict[str, object]:
     preview = dict(source.candidate_network_preview)
     preview["status"] = "promoted_to_official"
     preview["official_output_replaced"] = True
-    preview["official_aisle_ids"] = [str(item.get("id")) for item in _preview_aisles(source)]
+    preview["official_aisle_ids"] = [aisle.id for aisle in official.aisles]
     preview["notes"] = [
         "This candidate network was validated and promoted to the official layout.",
         "candidate_id and source_id retain the pre-promotion decision provenance.",
@@ -341,7 +353,13 @@ def _selected_variable_candidates(layout: LayoutResult, *, role: str) -> list[Ca
     ]
 
 
-def _promotion_report(layout: LayoutResult, status: str, extra_blockers: list[str] | None = None) -> dict[str, object]:
+def _promotion_report(
+    layout: LayoutResult,
+    status: str,
+    extra_blockers: list[str] | None = None,
+    *,
+    selection_source: LayoutResult | None = None,
+) -> dict[str, object]:
     comparison = layout.candidate_layout_preview.get("comparison", {})
     if not isinstance(comparison, dict):
         comparison = {}
@@ -351,7 +369,8 @@ def _promotion_report(layout: LayoutResult, status: str, extra_blockers: list[st
     blocker_list = [str(item) for item in blockers]
     if extra_blockers:
         blocker_list.extend(extra_blockers)
-    selection = layout.candidate_selection if isinstance(layout.candidate_selection, dict) else {}
+    decision = selection_source if selection_source is not None else layout
+    selection = decision.candidate_selection if isinstance(decision.candidate_selection, dict) else {}
     report: dict[str, object] = {
         "version": PROMOTION_VERSION,
         "requested": bool(layout.site.optimization.get("promote_candidate_layout_preview", False)),
@@ -368,6 +387,7 @@ def _promotion_report(layout: LayoutResult, status: str, extra_blockers: list[st
     }
     if status == "promoted":
         id_map = _preview_to_official_id_map(layout)
+        preview_stalls = candidate_layout_preview_layout(layout).stalls
         report.update(
             {
                 "official_aisle_ids": [aisle.id for aisle in layout.aisles],
@@ -377,6 +397,12 @@ def _promotion_report(layout: LayoutResult, status: str, extra_blockers: list[st
                     for item in _preview_aisles(layout)
                     if item.get("candidate_id") is not None
                 },
+                "preview_to_official_aisle_ids": id_map,
+                "preview_to_official_stall_ids": {
+                    preview.id: official.id
+                    for preview, official in zip(preview_stalls, layout.stalls, strict=True)
+                },
+                "pre_promotion_solver_provenance": dict(selection.get("solver_provenance") or {}),
             }
         )
     return report

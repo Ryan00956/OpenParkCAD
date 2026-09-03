@@ -24,6 +24,10 @@ version alone, show whether a requested rule actually ran.
 - Layout benchmark tools (`tools/benchmark_layouts.py`) and an explicit 20-case
   manifest (`benchmarks/layout_v0_4.json`).
 - Example `examples/multi_spine_comparison_site.json`.
+- Multi-spine promotion preserves the winning selector decision and publishes
+  consistent preview status, diagnostics, and preview-to-official aisle/stall
+  mappings. Benchmarks record measured search stages and fix CP-SAT seed,
+  worker count, and per-solve time limit for repeatable comparisons.
 - Route usability (first slice): when `accessible_min` is positive, classified
   accessible stalls must geometrically reach a hard accessible route within
   `constraints.accessible_route_touch_tolerance` (default 1.5 m). When

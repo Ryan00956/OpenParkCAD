@@ -7,6 +7,7 @@ import time
 from dataclasses import dataclass, replace
 from typing import Any, Callable
 
+from openparkcad.candidate_snapshot import finalize_official_selection_evidence
 from openparkcad.engineering_validation import build_engineering_validation
 from openparkcad.layout_candidates import (
     LayoutCandidateContext,
@@ -529,7 +530,7 @@ def _evaluation_from_baseline(context: LayoutCandidateContext, baseline: LayoutR
 
 def _as_official(layout: LayoutResult) -> LayoutResult:
     engineering = build_engineering_validation(layout, result_scope="official_layout")
-    return replace(layout, engineering_validation=engineering)
+    return finalize_official_selection_evidence(replace(layout, engineering_validation=engineering))
 
 
 def _with_report(layout: LayoutResult, report: dict[str, Any]) -> LayoutResult:
