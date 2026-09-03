@@ -60,6 +60,17 @@ def build_candidate_objects(layout: LayoutResult) -> list[CandidateObject]:
 def candidate_snapshot_report(layout: LayoutResult) -> dict[str, object]:
     objects = layout.candidate_objects or build_candidate_objects(layout)
     conflict_matrix = _conflict_matrix(objects)
+    selection = layout.candidate_selection if isinstance(layout.candidate_selection, dict) else {}
+    if selection:
+        reported_selection = dict(selection)
+    else:
+        reported_selection = {
+            "status": "not_recorded",
+            "reason": "selection_not_attached_to_layout",
+            "selected_ids": [],
+            "selected_count": 0,
+            "selected_branch_count": 0,
+        }
     return {
         "version": SNAPSHOT_VERSION,
         "object_count": len(objects),
@@ -67,9 +78,23 @@ def candidate_snapshot_report(layout: LayoutResult) -> dict[str, object]:
         "catalog_counts": _catalog_counts(objects),
         "conflict_count": len(conflict_matrix),
         "conflict_matrix": conflict_matrix,
-        "selection": layout.candidate_selection or select_candidate_objects(objects, layout.site),
+        "selection": reported_selection,
         "objects": [_candidate_report(item) for item in objects],
     }
+
+
+def attach_official_selection_evidence(source: LayoutResult, official: LayoutResult) -> LayoutResult:
+    """Keep the selector decision that produced ``official``; do not re-solve."""
+    selection = dict(source.candidate_selection) if isinstance(source.candidate_selection, dict) else {}
+    return replace(
+        official,
+        candidate_objects=list(source.candidate_objects),
+        candidate_selection=selection,
+        selected_branches=_catalog_selected_branches(source, official),
+        selected_connectors=_catalog_selected_connectors(source, official),
+        candidate_network_preview=dict(source.candidate_network_preview or {}),
+        candidate_layout_preview=dict(source.candidate_layout_preview or {}),
+    )
 
 
 def _maybe_promote_candidate_layout(layout: LayoutResult) -> LayoutResult:

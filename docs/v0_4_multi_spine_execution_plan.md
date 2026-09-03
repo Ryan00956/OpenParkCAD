@@ -1,6 +1,6 @@
 # v0.4 下一轮执行计划：方案基准、多主路候选与持续验证
 
-状态：**E0–E9 已在本仓库实现**（第 12 节仍为后续独立工作）。默认求解仍为 legacy/greedy；`layout_search.mode=multi_spine` 为显式开关，Top-K 与当前模板族是能力边界。
+状态：**E0—E9 主路径已落地，验收仍有缺口。** 默认求解仍为 legacy/greedy；`layout_search.mode=multi_spine` 为显式开关，Top-K 与当前模板族是能力边界。基线身份匹配与晋升选择证据已按 2026-09-03 复核修复；完整基准 repeats=3、远端 CI 与第 12 节道路轨迹仍未完成。
 
 适用基线：2026-09-02 本地检查的 `2e2766ae81d975e042551a24c18c8a1a88056ca1`，包版本 `0.3.0`。该次本机检查为 Python 3.12.7、OR-Tools 9.15.6755，301 项测试通过，Ruff 通过；这是一次本地记录，不代表远端 CI 状态，也不是以后必须保持的测试数量。
 
@@ -646,10 +646,10 @@ finally {
 - [x] E2：默认依赖与 optimizer 依赖 CI 均有真实执行结果。证据：`.github/workflows/ci.yml` 保留 3.10/3.12 `[dev]` 并新增 3.12 `.[dev,optimizer]` job（显式 import OR-Tools；`OPENPARKCAD_REQUIRE_ORTOOLS=1` 禁止 skip）；本地 optimizer 集 scratch `e2-optimizer-pytest.log`（30 passed, 0 skipped）。远端 GitHub 结论需推送后才可核对，本环境未 push。
 - [x] E3：候选身份、数据隔离和无发布副作用的评估接口完成。证据：`openparkcad/layout_candidates.py`、`openparkcad/layout_evaluation.py`、`tests/test_layout_candidate_context.py`；scratch `e3e4-pytest.log`。
 - [x] E4：直线、偏移和已生成的绕障候选在局部择优前保留完整上下文。证据：`collect_phase1_candidate_contexts` / `collect_layout_candidate_contexts`；同一场地可取得多套完整骨架，legacy `generate_layout` 包装保持原结果。scratch `e3e4-pytest.log`。
-- [x] E5：Top-K、基线保留、计时和预算状态可解释。证据：`openparkcad/layout_search.py`、`tests/test_layout_search.py`；scratch `e5e6-pytest.log`。
-- [x] E6：真实几何场地证明旧模板第二名能够在完整优化后胜出。证据：`tests/test_layout_search_integration.py::test_t04_second_template_spine_wins_after_official_rebuild` 在同一 `SiteSpec` 上比较 `generate_layout` 与 `generate_layout_legacy`（greedy，不注入 `legacy_fn`），`publication.replaced`、更高官方分数、不同车位 ID，且 graph/maneuver/vehicle/site-quota/engineering/operational 均 executed+valid；示例 JSON 的 cpsat 断言经 `require_ortools()` 门控，`[dev]` 无 OR-Tools 时 skip（scratch `t04-dev-no-ortools-pytest.log`：7 passed, 1 skipped）；`examples/multi_spine_comparison_site.json` CLI 晋升 65→67 车位 / 6500→6699.5；scratch `t04-fix-pytest.log`、`t04-cli/`。
+- [x] E5：Top-K、基线保留、计时和预算状态可解释。证据：`openparkcad/layout_search.py`、`tests/test_layout_search.py`；scratch `e5e6-pytest.log`。基线匹配改为骨架几何等价，无匹配时不把任意候选当作已评估。
+- [x] E6：真实几何场地证明旧模板第二名能够在完整优化后胜出。证据：`tests/test_layout_search_integration.py::test_t04_second_template_spine_wins_after_official_rebuild` 在同一 `SiteSpec` 上比较 `generate_layout` 与 `generate_layout_legacy`（greedy，不注入 `legacy_fn`），`publication.replaced`、更高官方分数、不同车位 ID，且 graph/maneuver/vehicle/site-quota/engineering/operational 均 executed+valid；示例 JSON 的 cpsat 断言经 `require_ortools()` 门控，`[dev]` 无 OR-Tools 时 skip（scratch `t04-dev-no-ortools-pytest.log`：7 passed, 1 skipped）；`examples/multi_spine_comparison_site.json` CLI 晋升 65→67 车位 / 6500→6699.5；scratch `t04-fix-pytest.log`、`t04-cli/`。晋升正式对象保留原始 `candidate_selection` / `selected_branches`，报告不再重新求解。
 - [x] E7：新开关、Schema、field_support、比较报告和正式输出相互一致。证据：`tests/test_layout_search_report.py`、Schema `layout_search`、CLI `layout-search-1`；scratch `e7-pytest.log`、`e7-cli-1/` 与 `e7-cli-2/`（两次 solve 分数与车位身份一致）。
-- [x] E8：测试矩阵通过；质量与时间对比记录提升、持平、失败和退化。证据：scratch `e8-full-pytest.log`（338 passed，覆盖率 83.57%）；`e8-benchmark/` smoke `--profile all` 20/20；full 80 runs（repeats=1）中 dogleg-obstacle 的 multi 变体在 180s 超时，同一变体在 smoke 240s 完成。
+- [x] E8：测试矩阵通过；质量与时间对比记录提升、持平、失败和退化。证据：scratch `e8-full-pytest.log`（338 passed，覆盖率 83.57%）；`e8-benchmark/` smoke `--profile all` 20/20；full 80 runs（repeats=1）中 dogleg-obstacle 的 multi 变体在 180s 超时，同一变体在 smoke 240s 完成。`search_fields` 已接通 `layout_search` 计数；三次重复性能结论尚未取得，不能当作当前提交的完整性能验收。
 - [x] E9：文档只声明已完成能力；独立 wheel 执行和回退验证通过。证据见 scratch `e9-wheel/` 与本文件文档更新。比较示例改为可晋升场地后，源码 CLI 见 `t04-cli/`，已安装 wheel 再解该示例见 `e9-wheel/run-promo/`（67 vs 65 车位，`publication.replaced=true`）。
 
 建议实施提交边界与 E 步骤对应：基准工具、CI、候选隔离、枚举提取、搜索协调、报告集成、验证收尾。每个边界可独立审查，不把纯代码移动和算法行为变化混成一个无法核对的大改动。是否创建提交、推送或发布由实际任务要求决定。

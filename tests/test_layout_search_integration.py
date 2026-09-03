@@ -3,9 +3,12 @@ from __future__ import annotations
 import json
 from dataclasses import replace
 from pathlib import Path
+from unittest.mock import patch
 
+from openparkcad.candidate_snapshot import candidate_snapshot_report
 from openparkcad.cli import _final_layout_errors
-from openparkcad.generator import generate_layout, generate_layout_legacy
+from openparkcad.generator import collect_layout_candidate_contexts, generate_layout, generate_layout_legacy
+from openparkcad.layout_search import match_baseline_context
 from openparkcad.models import AisleClassSpec, EntranceSpec, SiteSpec, StallSpec, VehicleSpec, site_from_dict
 from openparkcad.scoring import score_total
 from tests.ortools_util import require_ortools
@@ -200,6 +203,56 @@ def _assert_official_candidate_checks_executed(layout, *, expected_backend: str 
     if expected_backend is not None:
         assert winner.get("actual_backend") == expected_backend
     assert int(winner.get("stall_count") or 0) == layout.stall_count
+
+
+def test_baseline_match_uses_spine_geometry_not_shared_aisle_ids() -> None:
+    site = _simple_site(
+        main_aisle_lateral_offsets=[-6.0, 0.0, 6.0],
+        layout_search={"mode": "multi_spine", "top_k": 4, "refinement_budget_seconds": 20.0},
+        promote_candidate_layout_preview=True,
+    )
+    baseline = generate_layout_legacy(site)
+    contexts = [item for item in collect_layout_candidate_contexts(site) if item.template_layout.aisles]
+    laterals = {float(item.source["aisle_lateral_offset"]) for item in contexts}
+    assert {-6.0, 0.0, 6.0} <= laterals
+    matched = match_baseline_context(contexts, baseline)
+    assert matched is not None
+    assert float(matched.source["aisle_lateral_offset"]) == 0.0
+    plus6 = next(item for item in contexts if abs(float(item.source["aisle_lateral_offset"]) - 6.0) < 1e-9)
+    assert match_baseline_context([plus6], baseline) is None
+    claimed = [item for item in contexts if match_baseline_context([item], baseline) is not None]
+    assert [float(item.source["aisle_lateral_offset"]) for item in claimed] == [0.0]
+    multi = generate_layout(site)
+    winners = [item for item in multi.layout_search["candidates"] if item.get("retain_reason") == "legacy_winner"]
+    assert len(winners) == 1
+    assert float(winners[0]["aisle_lateral_offset"]) == 0.0
+
+
+def test_promoted_official_layout_keeps_original_selection_evidence() -> None:
+    site = _t04_comparison_site()
+    multi = generate_layout(site)
+    assert multi.layout_search["publication"]["replaced"] is True
+    assert any(aisle.role == "branch" for aisle in multi.aisles)
+    assert multi.selected_branches
+    branch_ids = {branch["id"] for branch in multi.selected_branches}
+    official_ids = {aisle.id for aisle in multi.aisles}
+    assert branch_ids <= official_ids
+    selection = multi.candidate_selection
+    assert selection.get("selected_ids")
+    assert selection.get("solver_provenance")
+    stored_ids = list(selection["selected_ids"])
+    with patch("openparkcad.candidate_snapshot.select_candidate_objects") as mocked:
+        mocked.side_effect = AssertionError("report must serialize the stored selection")
+        snapshot = candidate_snapshot_report(multi)
+    assert snapshot["selection"]["selected_ids"] == stored_ids
+    assert snapshot["selection"].get("solver_provenance") == selection.get("solver_provenance")
+    winner = next(
+        item
+        for item in multi.layout_search["candidates"]
+        if item.get("candidate_id") == multi.layout_search["publication"]["official_candidate_id"]
+    )
+    assert winner.get("selected_ids") == stored_ids
+    assert winner.get("solver_provenance") == selection.get("solver_provenance")
 
 
 def test_t04_second_template_spine_wins_after_official_rebuild() -> None:

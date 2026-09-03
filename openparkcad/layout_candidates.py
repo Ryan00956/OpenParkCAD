@@ -150,6 +150,36 @@ def copy_layout(layout: LayoutResult, *, site: SiteSpec | None = None) -> Layout
     )
 
 
+def spine_geometries_equivalent(left: LayoutResult, right: LayoutResult, *, area_tolerance: float = 1e-3) -> bool:
+    """True when spine-role aisle polygons occupy the same site region."""
+    from shapely.geometry import Polygon as ShapelyPolygon
+    from shapely.ops import unary_union
+
+    def union(layout: LayoutResult):
+        shapes = []
+        for aisle in layout.aisles:
+            if aisle.role not in SPINE_ROLES or len(aisle.polygon) < 3:
+                continue
+            poly = ShapelyPolygon(list(aisle.polygon))
+            if poly.is_empty:
+                continue
+            if not poly.is_valid:
+                poly = poly.buffer(0)
+            if not poly.is_empty:
+                shapes.append(poly)
+        if not shapes:
+            return None
+        return unary_union(shapes)
+
+    first = union(left)
+    second = union(right)
+    if first is None or second is None:
+        return False
+    delta = first.symmetric_difference(second).area
+    scale = max(first.area, second.area, 1.0)
+    return delta <= area_tolerance * scale
+
+
 def spine_family(layout: LayoutResult) -> str:
     mode = layout.generation_mode or ""
     if "multi_jog" in mode:

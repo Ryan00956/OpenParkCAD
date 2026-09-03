@@ -12,6 +12,7 @@ from openparkcad.layout_candidates import (
     LayoutCandidateContext,
     LayoutCandidateEvaluation,
     spine_family,
+    spine_geometries_equivalent,
     stall_assignment_payload,
 )
 from openparkcad.layout_evaluation import evaluate_layout_candidate
@@ -158,9 +159,10 @@ def search_multi_spine(
     budget_started = clock()
     budget_exhausted = False
     unfinished: list[str] = []
+    matched_baseline = match_baseline_context(retained, baseline)
 
-    for index, context in enumerate(retained):
-        if index == 0 and _is_baseline_context(context, baseline):
+    for context in retained:
+        if matched_baseline is not None and context.candidate_id == matched_baseline.candidate_id:
             evaluation = _evaluation_from_baseline(context, baseline)
             evaluations.append(evaluation)
             continue
@@ -254,26 +256,30 @@ def match_baseline_context(
     contexts: list[LayoutCandidateContext],
     baseline: LayoutResult,
 ) -> LayoutCandidateContext | None:
+    """Return the collected context whose spine geometry matches baseline, or None."""
     assignment = stall_assignment_payload(baseline.site)
     family = spine_family(baseline)
-    scored: list[tuple[int, LayoutCandidateContext]] = []
+    matches: list[LayoutCandidateContext] = []
     for item in contexts:
-        score = 0
-        if stall_assignment_payload(item.site) == assignment:
-            score += 4
-        if (item.source.get("family") or spine_family(item.template_layout)) == family:
-            score += 3
-        if item.template_layout.main_entrance_id == baseline.main_entrance_id:
-            score += 2
-        if item.template_layout.selected_heading_degrees == baseline.selected_heading_degrees:
-            score += 1
-        if _aisle_ids(item.template_layout) == _aisle_ids(baseline):
-            score += 8
-        if item.template_layout.stall_count == baseline.stall_count:
-            score += 1
-        scored.append((score, item))
-    scored.sort(key=lambda pair: (-pair[0], pair[1].candidate_id))
-    return scored[0][1] if scored else None
+        item_family = item.source.get("family") or spine_family(item.template_layout)
+        if item_family != family:
+            continue
+        if stall_assignment_payload(item.site) != assignment:
+            continue
+        if item.template_layout.main_entrance_id != baseline.main_entrance_id:
+            continue
+        if not spine_geometries_equivalent(item.template_layout, baseline):
+            continue
+        matches.append(item)
+    if not matches:
+        return None
+    matches.sort(
+        key=lambda item: (
+            0 if item.template_layout.stall_count == baseline.stall_count else 1,
+            item.candidate_id,
+        )
+    )
+    return matches[0]
 
 
 def choose_official(
@@ -460,20 +466,11 @@ def _family_key(context: LayoutCandidateContext) -> tuple[Any, ...]:
     )
 
 
-def _aisle_ids(layout: LayoutResult) -> tuple[str, ...]:
-    return tuple(aisle.id for aisle in layout.aisles)
-
-
 def _baseline_candidate_id(baseline: LayoutResult) -> str:
     search = getattr(baseline, "layout_search", {}) or {}
     if isinstance(search, dict) and search.get("official_candidate_id"):
         return str(search["official_candidate_id"])
     return f"baseline:{spine_family(baseline)}:{baseline.main_entrance_id}:{baseline.stall_count}"
-
-
-def _is_baseline_context(context: LayoutCandidateContext, baseline: LayoutResult) -> bool:
-    matched = match_baseline_context([context], baseline)
-    return matched is not None and matched.candidate_id == context.candidate_id
 
 
 def _evaluation_from_baseline(context: LayoutCandidateContext, baseline: LayoutResult) -> LayoutCandidateEvaluation:
@@ -584,6 +581,10 @@ def _candidate_summary(evaluation: LayoutCandidateEvaluation, retained: list[Lay
         "failure_class": evaluation.failure_class,
         "checks": evaluation.checks,
         "stall_count": evaluation.rebuilt_layout.stall_count if evaluation.rebuilt_layout is not None else None,
+        "solver_provenance": dict(evaluation.provenance or {}),
+        "selected_ids": list((evaluation.selection or {}).get("selected_ids") or []),
+        "selected_branch_count": (evaluation.selection or {}).get("selected_branch_count"),
+        "selected_connector_count": (evaluation.selection or {}).get("selected_connector_count"),
     }
 
 

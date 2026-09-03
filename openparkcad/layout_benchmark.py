@@ -387,16 +387,28 @@ def extract_layout_metrics(layout: LayoutResult | None) -> dict[str, Any]:
 
 
 def search_fields(layout: LayoutResult | None) -> dict[str, Any]:
-    report = {}
-    if layout is not None and isinstance(getattr(layout, "candidate_selection", None), dict):
-        report["candidate_selection_backend"] = layout.candidate_selection.get("backend", NOT_AVAILABLE)
+    search = getattr(layout, "layout_search", None) if layout is not None else None
+    search = search if isinstance(search, dict) else {}
+    counts = search.get("counts") if isinstance(search.get("counts"), dict) else {}
+    budget = search.get("budget") if isinstance(search.get("budget"), dict) else {}
+    report: dict[str, Any] = {}
+    selection = getattr(layout, "candidate_selection", None) if layout is not None else None
+    if isinstance(selection, dict) and selection:
+        report["candidate_selection_backend"] = selection.get("backend", NOT_AVAILABLE)
+
+    def _recorded(mapping: dict[str, Any], key: str) -> Any:
+        if key not in mapping or mapping[key] is None:
+            return NOT_AVAILABLE
+        return mapping[key]
+
+    official_id = search.get("official_candidate_id")
     return {
-        "generated_count": NOT_AVAILABLE,
-        "deduplicated_count": NOT_AVAILABLE,
-        "retained_count": NOT_AVAILABLE,
-        "evaluated_count": NOT_AVAILABLE,
-        "budget_exhausted": NOT_AVAILABLE,
-        "official_candidate_id": NOT_AVAILABLE,
+        "generated_count": _recorded(counts, "generated"),
+        "deduplicated_count": _recorded(counts, "deduplicated"),
+        "retained_count": _recorded(counts, "retained"),
+        "evaluated_count": _recorded(counts, "evaluated"),
+        "budget_exhausted": _recorded(budget, "exhausted"),
+        "official_candidate_id": official_id if official_id else NOT_AVAILABLE,
         **report,
     }
 

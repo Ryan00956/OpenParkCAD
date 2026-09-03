@@ -12,7 +12,11 @@ from openparkcad.candidate_layout_preview import (
 )
 from openparkcad.candidate_network_preview import build_candidate_network_preview
 from openparkcad.candidate_selector import select_candidate_objects
-from openparkcad.candidate_snapshot import build_candidate_objects, rebuild_official_layout_from_selection
+from openparkcad.candidate_snapshot import (
+    attach_official_selection_evidence,
+    build_candidate_objects,
+    rebuild_official_layout_from_selection,
+)
 from openparkcad.engineering_validation import build_engineering_validation
 from openparkcad.layout_candidates import (
     LayoutCandidateContext,
@@ -77,6 +81,8 @@ def evaluate_layout_candidate(
         if not selector_better:
             rebuilt = template
             used_template = True
+        else:
+            rebuilt = attach_official_selection_evidence(enriched, rebuilt)
 
     score = dict(rebuilt.score) if rebuilt is not None and rebuilt.score else None
     if rebuilt is not None and not _finite_score(score):

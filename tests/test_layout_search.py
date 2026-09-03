@@ -3,8 +3,10 @@ from __future__ import annotations
 from dataclasses import replace
 
 from openparkcad.layout_candidates import LayoutCandidateContext, LayoutCandidateEvaluation
+from openparkcad.layout_benchmark import NOT_AVAILABLE, search_fields
 from openparkcad.layout_search import (
     choose_official,
+    match_baseline_context,
     rank_contexts,
     read_layout_search,
     search_multi_spine,
@@ -124,6 +126,50 @@ def test_read_layout_search_rejects_illegal_values() -> None:
         assert "refinement_budget_seconds" in str(exc)
     else:
         raise AssertionError("non-positive budget must raise")
+
+
+def test_search_fields_read_layout_search_counts() -> None:
+    layout = replace(
+        _layout(score=10, stalls=2),
+        layout_search={
+            "counts": {"generated": 8, "deduplicated": 8, "retained": 4, "evaluated": 3},
+            "budget": {"exhausted": False},
+            "official_candidate_id": "cand-x",
+        },
+        candidate_selection={"backend": "greedy"},
+    )
+    fields = search_fields(layout)
+    assert fields["generated_count"] == 8
+    assert fields["deduplicated_count"] == 8
+    assert fields["retained_count"] == 4
+    assert fields["evaluated_count"] == 3
+    assert fields["budget_exhausted"] is False
+    assert fields["official_candidate_id"] == "cand-x"
+    assert fields["candidate_selection_backend"] == "greedy"
+    empty = search_fields(replace(_layout(score=1, stalls=1), layout_search={}))
+    assert empty["generated_count"] == NOT_AVAILABLE
+    assert empty["official_candidate_id"] == NOT_AVAILABLE
+
+
+def test_match_baseline_context_requires_spine_geometry() -> None:
+    baseline = _layout(score=50, stalls=5)
+    same = _context("cand-same", baseline, family="straight", score=50)
+    shifted = _layout(score=50, stalls=5)
+    shifted = replace(
+        shifted,
+        aisles=[
+            ParkingAisle(
+                id="A-MAIN",
+                polygon=[(2, 0), (6, 0), (6, 16), (2, 16)],
+                angle_degrees=90.0,
+                role="main",
+                connected_to_entrance_id="main",
+            )
+        ],
+    )
+    other = _context("cand-offset", shifted, family="straight", score=50)
+    assert match_baseline_context([other, same], baseline).candidate_id == "cand-same"
+    assert match_baseline_context([other], baseline) is None
 
 
 def test_rank_contexts_puts_legacy_winner_first_then_family_coverage() -> None:
