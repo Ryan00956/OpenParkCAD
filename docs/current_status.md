@@ -1,5 +1,10 @@
 # Current status
 
+The multi-spine iteration passed its 2026-09-03 closure checks: full regression,
+240 controlled benchmark runs, installed-wheel rollback checks, and both default
+and optimizer CI paths. See the [acceptance record](v0_4_multi_spine_acceptance.md)
+for the exact source commit, results, and remaining capability boundaries.
+
 OpenParkCAD is an executable `0.3.0` algorithm prototype. Its historical phase
 labels and package version are not capability claims: the trustworthy product
 boundary is the set of checks reported as active for the exact official layout.

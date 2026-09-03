@@ -240,6 +240,7 @@ on Python 3.10 and 3.12.
 - [Current status and capability matrix](docs/current_status.md)
 - [Roadmap](docs/roadmap.md)
 - [v0.4 benchmark and multi-spine execution plan](docs/v0_4_multi_spine_execution_plan.md) (E0–E9 implemented; §12 later)
+- [v0.4 multi-spine acceptance results](docs/v0_4_multi_spine_acceptance.md) (full regression, 240 benchmark runs, installed wheel, CI)
 - [Input model](docs/input_model.md)
 - [v0.3 vehicle and enforced-constraint contract](docs/v0.3_vehicle_and_constraints.md)
 - [Algorithm design discussion](docs/algorithm_design_discussion.md)

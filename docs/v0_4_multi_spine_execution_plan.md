@@ -1,6 +1,6 @@
 # v0.4 下一轮执行计划：方案基准、多主路候选与持续验证
 
-状态：**E0—E9 主路径已落地，验收仍有缺口。** 默认求解仍为 legacy/greedy；`layout_search.mode=multi_spine` 为显式开关，Top-K 与当前模板族是能力边界。基线身份匹配与晋升选择证据已按 2026-09-03 复核修复；完整基准 repeats=3、远端 CI 与第 12 节道路轨迹仍未完成。
+状态：**E0—E9 已完成本轮验收**，见 [2026-09-03 验收记录](v0_4_multi_spine_acceptance.md)。默认求解仍为 legacy/greedy；`layout_search.mode=multi_spine` 为显式开关，Top-K 与当前模板族是能力边界。第 12 节道路轨迹及 CAD 工作仍为后续阶段。
 
 适用基线：2026-09-02 本地检查的 `2e2766ae81d975e042551a24c18c8a1a88056ca1`，包版本 `0.3.0`。该次本机检查为 Python 3.12.7、OR-Tools 9.15.6755，301 项测试通过，Ruff 通过；这是一次本地记录，不代表远端 CI 状态，也不是以后必须保持的测试数量。
 
@@ -73,11 +73,11 @@
 
 ## 4. 先固定输入、结果和比较语义
 
-本节是**拟实施契约**。新的参数、类型、报告字段须在 E3—E7 实现并测试后才可使用。当前 parser 接受未知 optimization 字段，并不意味着已经执行这些字段。
+本节记录 **E3—E7 已实现的契约**。下面保留逐步实施和验证顺序；实际支持仍以 runtime diagnostics 为准，未知 optimization 字段被 parser 接受不等于已执行。
 
 ### 4.1 新增输入
 
-拟新增 `optimization.layout_search`，沿用现有 backend 和晋升开关：
+已实现 `optimization.layout_search`，沿用现有 backend 和晋升开关：
 
 ```json
 {
@@ -127,7 +127,7 @@
 
 ### 4.3 候选身份与隔离
 
-拟在 `openparkcad/layout_candidates.py` 定义两个轻量数据结构：
+在 `openparkcad/layout_candidates.py` 定义两个轻量数据结构：
 
 - `LayoutCandidateContext`：`candidate_id`、`spine_id`、候选自己的 `SiteSpec`、模板 `LayoutResult`、本候选的支路诊断、来源参数与预筛结果。
 - `LayoutCandidateEvaluation`：候选 ID、实际 selector 后端和 provenance、预览结果、重建后的布局、各检查结果、最终分数、耗时与失败分类。
@@ -193,7 +193,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Baseline solve failed' }
 
 ### E1.1 建立案例清单
 
-**拟新增文件**：`benchmarks/layout_v0_4.json`。
+**实现文件**：`benchmarks/layout_v0_4.json`。
 
 执行步骤：
 
@@ -233,11 +233,11 @@ manifest 中至少有以下概念；实际字段在 E1 固定并由 runner 验�
 }
 ```
 
-上面仅展示三行，落地清单需要完整列出 19 个现有输入。配额场地的本质断言是配额与接触规则成立；若新搜索真实找到满足全部规则的方案，允许从拒绝变成有效，记录原因并核验，不能为了维持旧结果而强制拒绝。
+上面仅展示三行，当前清单完整列出 19 个原始输入和 1 个跨主路收益示例。配额场地的本质断言是配额与接触规则成立；若新搜索真实找到满足全部规则的方案，允许从拒绝变成有效，记录原因并核验，不能为了维持旧结果而强制拒绝。
 
 ### E1.2 实现 runner 和单案例 worker
 
-**拟新增文件**：`tools/benchmark_layouts.py`、`tools/benchmark_case.py`、`tests/test_layout_benchmark.py`。
+**实现文件**：`tools/benchmark_layouts.py`、`tools/benchmark_case.py`、`tests/test_layout_benchmark.py`。
 
 执行步骤：
 
@@ -312,7 +312,7 @@ E1 的测试只需要用小型案例验证 runner 的协议：有效、预期拒
 3. 成功路径必须断言 actual backend 为 cpsat、fallback reason 为空；不能只断言“得到一个有效布局”。
 4. 保留缺 OR-Tools 的模拟测试，并在默认依赖 job 验证默认求解不会导入 OR-Tools。
 
-为可比较实验拟新增可选 `optimization.selector_num_workers`：不提供时保留当前 OR-Tools 行为；基准配置和小型确定性测试显式设为 1，并记录实际值。仅设置 seed 不能承诺有时间限制的求解在所有机器上都产生相同结果。
+可比较实验使用可选 `optimization.selector_num_workers`：不提供时保留当前 OR-Tools 行为；基准配置和小型确定性测试显式设为 1，并记录实际值。仅设置 seed 不能承诺有时间限制的求解在所有机器上都产生相同结果。
 
 该参数的 selector 传递、CP-SAT 设置、局部解析和 provenance 在 E2 一起实现；E7 再将说明与完整搜索 Schema 汇合。E1 的旧版本测量尚无该参数时记录 `not_available`，不得假称已使用单 worker，也不与 E2 之后的受控性能数据混为同一批。
 
@@ -336,7 +336,7 @@ E1 的测试只需要用小型案例验证 runner 的协议：有效、预期拒
 
 ### E3.2 拆开候选评估与发布
 
-**拟新增模块**：`openparkcad/layout_evaluation.py`、`openparkcad/layout_search.py`。
+**实现模块**：`openparkcad/layout_evaluation.py`、`openparkcad/layout_search.py`。
 
 执行步骤：
 
@@ -440,7 +440,7 @@ B 连同它原来的选择证据作为只读保底保存。旧流程可能保有
 
 ### E7.2 新增比较报告
 
-拟新增独立版本块 `layout_search.version = "layout-search-1"`。顶层报告契约能兼容增加字段时沿用原版本；若改变原字段含义或删除字段，必须同时更新契约、测试和使用方。本轮优先采用增加字段的方式，不提前改包版本。
+已新增独立版本块 `layout_search.version = "layout-search-1"`。顶层报告契约能兼容增加字段时沿用原版本；若改变原字段含义或删除字段，必须同时更新契约、测试和使用方。本轮优先采用增加字段的方式，不提前改包版本。
 
 新块至少包含：
 
@@ -483,7 +483,7 @@ B 连同它原来的选择证据作为只读保底保存。旧流程可能保有
 
 ### 9.1 必须覆盖的测试矩阵
 
-拟新增测试按责任分文件，例如 `test_layout_candidate_context.py`、`test_layout_search.py`、`test_layout_search_integration.py`、`test_layout_search_report.py`；文件名可随实现组织调整，但以下行为必须有证据。
+测试按责任分文件，包括 `test_layout_candidate_context.py`、`test_layout_search.py`、`test_layout_search_integration.py`、`test_layout_search_report.py`；文件名可随实现组织调整，但以下行为必须有证据。
 
 | 编号 | 场景 | 必须断言 |
 | --- | --- | --- |
@@ -510,7 +510,7 @@ T04 至少同时有一个 greedy 集成证明；CP-SAT 实际成功路径由 opt
 
 沿用现有代表性车辆拒绝测试。新的路径只能在真的满足已请求车辆检查时接受案例，不能通过关闭 exact、放宽半径、删除不方便的障碍或降低配额获得改进。
 
-以下是**对应步骤实现后**的针对性命令。新增测试文件在其所属步骤内创建，未创建前不能将命令失败计作产品回归；文件改名时同步这些入口。
+以下是各步骤对应的针对性验证命令，测试文件均已实现；文件改名时同步这些入口。
 
 ```powershell
 # E2：已有选择链的真实 optimizer 路径
@@ -568,7 +568,7 @@ E1 单独执行 `python -m pytest -q tests/test_layout_benchmark.py`；在本地
 
 ### 命令入口
 
-下面的基准命令属于**E1 实现后**的目标接口；`all` 需要 E7 完成。实施工具时应按这些命令提供参数，若最终改名，要同步本文件和工具帮助。
+以下基准接口均已实现；`all` 执行四种变体。命令和参数需要与工具帮助保持一致。
 
 ```powershell
 # E1 完成后：建立旧流程对比
@@ -578,7 +578,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Legacy benchmark needs inspection' }
 
 # E7 完成后：四个变体的完整比较
 $runId = Get-Date -Format 'yyyyMMdd-HHmmss'
-& ./.venv/Scripts/python.exe tools/benchmark_layouts.py --manifest benchmarks/layout_v0_4.json --profile all --subset full --repeats 3 --timeout-seconds 120 --out "output/benchmarks/v0_4/$runId-all"
+& ./.venv/Scripts/python.exe tools/benchmark_layouts.py --manifest benchmarks/layout_v0_4.json --profile all --subset full --repeats 3 --timeout-seconds 180 --out "output/benchmarks/v0_4/$runId-all"
 if ($LASTEXITCODE -ne 0) { throw 'Benchmark needs inspection' }
 
 # E9：保留现有质量与构建入口
@@ -641,18 +641,18 @@ finally {
 
 ## 11. 可逐项勾选的交付清单
 
-以下清单当前全部待实施；完成时附上对应 commit 或证据路径，不只改复选框。
+以下清单以 [本轮验收记录](v0_4_multi_spine_acceptance.md) 和 [机器可读统计](verification/v0_4_20260903.json) 为当前结论。旧版本历史日志继续保留，不代替本轮验证。
 
 - [x] E0：已有基线可复查，未覆盖原有工作与输出。证据：scratch `e0-baseline/`（commit `2e2766ae81d975e042551a24c18c8a1a88056ca1`，301 passed，`examples/phase0_site.json` 三件套 stall_count=83，`engineering_validation.result_scope=official_layout`）；仓库内 gitignored 副本 `output/verification/v0_4/20260902-214041-baseline/`。本步无运行时逻辑改动。
-- [x] E1：19 个现有输入进入 manifest，smoke/full 集合固定，runner 保存成功与失败证据。证据：`benchmarks/layout_v0_4.json`、`tools/benchmark_layouts.py`、`tools/benchmark_case.py`、`tests/test_layout_benchmark.py`；协议测试日志 scratch `e1-pytest.log`；smoke `--profile legacy --subset smoke` 结果 scratch `e1-benchmark/` 与 `output/benchmarks/v0_4/20260902-220518-legacy-smoke/`（6 valid / 4 预期 invalid / 5 次 actual cpsat）。
-- [x] E2：默认依赖与 optimizer 依赖 CI 均有真实执行结果。证据：`.github/workflows/ci.yml` 保留 3.10/3.12 `[dev]` 并新增 3.12 `.[dev,optimizer]` job（显式 import OR-Tools；`OPENPARKCAD_REQUIRE_ORTOOLS=1` 禁止 skip）；本地 optimizer 集 scratch `e2-optimizer-pytest.log`（30 passed, 0 skipped）。远端 GitHub 结论需推送后才可核对，本环境未 push。
+- [x] E1：20 个明确输入进入 manifest；smoke/full 集合固定，runner 保存成功、拒绝、异常、超时及原始输入哈希。真实基准参数和后端记录见验收统计。
+- [x] E2：远端 Python 3.10 / 3.12 默认依赖路径均通过（337 passed、8 个可选测试跳过）；optimizer job 显式导入 OR-Tools，63 passed、0 skipped。[源码 67eec8b 的 CI](https://github.com/helenananaa/OpenParkCAD/actions/runs/33736091918)。
 - [x] E3：候选身份、数据隔离和无发布副作用的评估接口完成。证据：`openparkcad/layout_candidates.py`、`openparkcad/layout_evaluation.py`、`tests/test_layout_candidate_context.py`；scratch `e3e4-pytest.log`。
 - [x] E4：直线、偏移和已生成的绕障候选在局部择优前保留完整上下文。证据：`collect_phase1_candidate_contexts` / `collect_layout_candidate_contexts`；同一场地可取得多套完整骨架，legacy `generate_layout` 包装保持原结果。scratch `e3e4-pytest.log`。
-- [x] E5：Top-K、基线保留、计时和预算状态可解释。证据：`openparkcad/layout_search.py`、`tests/test_layout_search.py`；scratch `e5e6-pytest.log`。基线匹配改为骨架几何等价，无匹配时不把任意候选当作已评估。
-- [x] E6：真实几何场地证明旧模板第二名能够在完整优化后胜出。证据：`tests/test_layout_search_integration.py::test_t04_second_template_spine_wins_after_official_rebuild` 在同一 `SiteSpec` 上比较 `generate_layout` 与 `generate_layout_legacy`（greedy，不注入 `legacy_fn`），`publication.replaced`、更高官方分数、不同车位 ID，且 graph/maneuver/vehicle/site-quota/engineering/operational 均 executed+valid；示例 JSON 的 cpsat 断言经 `require_ortools()` 门控，`[dev]` 无 OR-Tools 时 skip（scratch `t04-dev-no-ortools-pytest.log`：7 passed, 1 skipped）；`examples/multi_spine_comparison_site.json` CLI 晋升 65→67 车位 / 6500→6699.5；scratch `t04-fix-pytest.log`、`t04-cli/`。晋升正式对象保留原始 `candidate_selection` / `selected_branches`，报告不再重新求解。
-- [x] E7：新开关、Schema、field_support、比较报告和正式输出相互一致。证据：`tests/test_layout_search_report.py`、Schema `layout_search`、CLI `layout-search-1`；scratch `e7-pytest.log`、`e7-cli-1/` 与 `e7-cli-2/`（两次 solve 分数与车位身份一致）。
-- [x] E8：测试矩阵通过；质量与时间对比记录提升、持平、失败和退化。证据：scratch `e8-full-pytest.log`（338 passed，覆盖率 83.57%）；`e8-benchmark/` smoke `--profile all` 20/20；full 80 runs（repeats=1）中 dogleg-obstacle 的 multi 变体在 180s 超时，同一变体在 smoke 240s 完成。`search_fields` 已接通 `layout_search` 计数；multi_spine 在基线生成时收集骨架，不再第二遍完整枚举（`collect_reused_baseline_generation`）。三次重复性能结论尚未在当前提交上重跑，不能当作完整性能验收。
-- [x] E9：文档只声明已完成能力；独立 wheel 执行和回退验证通过。证据见 scratch `e9-wheel/` 与本文件文档更新。比较示例改为可晋升场地后，源码 CLI 见 `t04-cli/`，已安装 wheel 再解该示例见 `e9-wheel/run-promo/`（67 vs 65 车位，`publication.replaced=true`）。
+- [x] E5：Top-K、基线保留、计时和预算状态可解释；基线仅按真实骨架几何等价匹配。基线生成时收集上下文，复用路径由集成回归与完整基准验证。
+- [x] E6：同一合成场地经过完整几何计算与优化后可由另一骨架胜出；比较示例 65→67 车位，三次 end-loop CP-SAT 对比为 82→105 车位。实际选择与 solver provenance 随结果保存。
+- [x] E7：新开关、Schema、field_support、比较报告和正式输出一致；已补齐晋升状态、正式验证及预览到正式道路/车位 ID 的映射，导出不再次求解。
+- [x] E8：完整回归 345 passed，覆盖率 83.68%；20 案例 × 4 变体 × 3 次共 240 次基准全部符合预期，120/120 CP-SAT 请求实际执行，无回退或源输入变更。收益、持平、拒绝和耗时范围见验收记录。
+- [x] E9：wheel / sdist 构建成功；独立环境先验证默认依赖路径，再验证 optimizer 晋升和完整报告。legacy / 关闭晋升两条回退均得到 65 个车位且正式几何相同；包内 Python 源文件哈希与验收源码一致。
 
 建议实施提交边界与 E 步骤对应：基准工具、CI、候选隔离、枚举提取、搜索协调、报告集成、验证收尾。每个边界可独立审查，不把纯代码移动和算法行为变化混成一个无法核对的大改动。是否创建提交、推送或发布由实际任务要求决定。
 
