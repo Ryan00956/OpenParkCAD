@@ -40,12 +40,12 @@ def generate_layout(site: SiteSpec) -> LayoutResult:
     return generate_layout_legacy(site)
 
 
-def generate_layout_legacy(site: SiteSpec) -> LayoutResult:
+def generate_layout_legacy(site: SiteSpec, *, context_sink: list | None = None) -> LayoutResult:
     candidates = _candidate_stalls(site)
     assignments = _candidate_stall_assignments(site)
     if len(assignments) <= 1:
         selected_site = _site_with_stall_assignment(site, candidates[0], candidates[0])
-        layout = _generate_layout_for_site(selected_site)
+        layout = _generate_layout_for_site(selected_site, context_sink=context_sink)
         selected = _layout_valid(layout)
         # Preserve layout.site mutations (e.g. synthesized passing-bay site_features).
         object.__setattr__(
@@ -71,7 +71,10 @@ def generate_layout_legacy(site: SiteSpec) -> LayoutResult:
         return attach_candidate_snapshot(_with_engineering_validation(layout))
 
     layouts = [
-        _generate_layout_for_site(_site_with_stall_assignment(site, main_stall, branch_stall))
+        _generate_layout_for_site(
+            _site_with_stall_assignment(site, main_stall, branch_stall),
+            context_sink=context_sink,
+        )
         for main_stall, branch_stall in assignments
     ]
     valid_layouts = [layout for layout in layouts if _layout_valid(layout)]
@@ -132,7 +135,7 @@ def generate_layout_legacy(site: SiteSpec) -> LayoutResult:
     return attach_candidate_snapshot(_with_engineering_validation(best))
 
 
-def _generate_layout_for_site(site: SiteSpec) -> LayoutResult:
+def _generate_layout_for_site(site: SiteSpec, *, context_sink: list | None = None) -> LayoutResult:
     """Generate the current Phase 1 layout.
 
     Phase 1 deliberately supports one conservative pattern:
@@ -146,7 +149,9 @@ def _generate_layout_for_site(site: SiteSpec) -> LayoutResult:
     best_operational_rejection: LayoutResult | None = None
     unsupported = phase1_unsupported_inputs(site)
 
-    for candidate in iter_phase1_candidates(site, _finalize_candidate, _layout_valid, score_total):
+    for candidate in iter_phase1_candidates(
+        site, _finalize_candidate, _layout_valid, score_total, context_sink=context_sink
+    ):
         layout = candidate.layout
         attempts.append(
             AngleAttempt(

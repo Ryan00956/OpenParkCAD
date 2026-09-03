@@ -146,6 +146,8 @@ def test_search_fields_read_layout_search_counts() -> None:
     assert fields["budget_exhausted"] is False
     assert fields["official_candidate_id"] == "cand-x"
     assert fields["candidate_selection_backend"] == "greedy"
+    assert "collect_seconds" in fields
+    assert "collect_reused_baseline_generation" in fields
     empty = search_fields(replace(_layout(score=1, stalls=1), layout_search={}))
     assert empty["generated_count"] == NOT_AVAILABLE
     assert empty["official_candidate_id"] == NOT_AVAILABLE

@@ -105,19 +105,12 @@ def iter_phase1_candidates(
     return candidates
 
 
-def collect_phase1_candidate_contexts(
-    site: SiteSpec,
-    finalize_layout: FinalizeLayout,
-    layout_valid: LayoutValid,
-    score_total: LayoutScoreTotal,
-) -> list:
-    """Collect complete spine contexts before local ranking discards them."""
+def contexts_from_collected_records(records: list) -> list:
+    """Turn phase-1 sink records into isolated layout candidate contexts."""
     from openparkcad.layout_candidates import context_from_layout
 
-    sink: list[dict[str, object]] = []
-    iter_phase1_candidates(site, finalize_layout, layout_valid, score_total, context_sink=sink)
     contexts = []
-    for record in sink:
+    for record in records:
         layout = record["layout"]
         status = "collected"
         reason = None
@@ -137,6 +130,18 @@ def collect_phase1_candidate_contexts(
             )
         )
     return contexts
+
+
+def collect_phase1_candidate_contexts(
+    site: SiteSpec,
+    finalize_layout: FinalizeLayout,
+    layout_valid: LayoutValid,
+    score_total: LayoutScoreTotal,
+) -> list:
+    """Collect complete spine contexts before local ranking discards them."""
+    sink: list[dict[str, object]] = []
+    iter_phase1_candidates(site, finalize_layout, layout_valid, score_total, context_sink=sink)
+    return contexts_from_collected_records(sink)
 
 
 def _record_collected_spine(

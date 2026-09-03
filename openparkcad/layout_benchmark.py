@@ -409,6 +409,8 @@ def search_fields(layout: LayoutResult | None) -> dict[str, Any]:
         "evaluated_count": _recorded(counts, "evaluated"),
         "budget_exhausted": _recorded(budget, "exhausted"),
         "official_candidate_id": official_id if official_id else NOT_AVAILABLE,
+        "collect_seconds": _recorded(budget, "collect_seconds"),
+        "collect_reused_baseline_generation": _recorded(budget, "collect_reused_baseline_generation"),
         **report,
     }
 

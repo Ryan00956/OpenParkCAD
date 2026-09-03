@@ -100,6 +100,7 @@ def search_multi_spine(
     config = config or read_layout_search(site)
     clock = time_fn or time.perf_counter
     evaluate = evaluate_fn or evaluate_layout_candidate
+    reuse_legacy_collect = collect_fn is None and legacy_fn is None
     if collect_fn is None:
         from openparkcad.generator import collect_layout_candidate_contexts
 
@@ -114,7 +115,13 @@ def search_multi_spine(
         legacy = legacy_fn
 
     baseline_started = clock()
-    baseline = legacy(site)
+    collected_records: list = []
+    reused_collect = False
+    if reuse_legacy_collect and config.top_k > 1:
+        baseline = legacy(site, context_sink=collected_records)
+        reused_collect = True
+    else:
+        baseline = legacy(site)
     baseline_seconds = clock() - baseline_started
     promotion_requested = bool(site.optimization.get("promote_candidate_layout_preview", False))
     baseline_valid = _publishable(baseline)
@@ -146,7 +153,12 @@ def search_multi_spine(
         return _with_report(baseline, report)
 
     collect_started = clock()
-    contexts = _dedupe_contexts(collect(site))
+    if reused_collect:
+        from openparkcad.phase1_candidates import contexts_from_collected_records
+
+        contexts = _dedupe_contexts(contexts_from_collected_records(collected_records))
+    else:
+        contexts = _dedupe_contexts(collect(site))
     report["counts"]["generated"] = len(contexts)
     report["counts"]["collectable"] = len([item for item in contexts if item.template_layout.aisles])
     ranked = rank_contexts(contexts, baseline)
@@ -181,7 +193,8 @@ def search_multi_spine(
 
     report["budget"]["configured_seconds"] = config.refinement_budget_seconds
     report["budget"]["elapsed_seconds"] = clock() - budget_started
-    report["budget"]["collect_seconds"] = collect_started and (budget_started - collect_started)
+    report["budget"]["collect_seconds"] = 0.0 if reused_collect else (budget_started - collect_started)
+    report["budget"]["collect_reused_baseline_generation"] = reused_collect
     report["budget"]["exhausted"] = budget_exhausted
     report["budget"]["unfinished_candidate_ids"] = unfinished
     report["status"] = "budget_exhausted" if budget_exhausted else "completed"
@@ -549,6 +562,8 @@ def _empty_report(config: LayoutSearchConfig, promotion_requested: bool) -> dict
             "configured_seconds": config.refinement_budget_seconds,
             "elapsed_seconds": None,
             "baseline_seconds": None,
+            "collect_seconds": None,
+            "collect_reused_baseline_generation": False,
             "exhausted": False,
             "unfinished_candidate_ids": [],
         },

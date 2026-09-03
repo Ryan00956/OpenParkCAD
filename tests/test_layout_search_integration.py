@@ -205,6 +205,33 @@ def _assert_official_candidate_checks_executed(layout, *, expected_backend: str 
     assert int(winner.get("stall_count") or 0) == layout.stall_count
 
 
+def test_multi_spine_reuses_legacy_phase1_generation() -> None:
+    import openparkcad.generator as generator_mod
+    import openparkcad.phase1_candidates as phase1_mod
+
+    site = _simple_site(
+        layout_search={"mode": "multi_spine", "top_k": 4, "refinement_budget_seconds": 20.0},
+        promote_candidate_layout_preview=True,
+    )
+    real = phase1_mod.iter_phase1_candidates
+    calls = {"n": 0}
+
+    def wrapped(*args, **kwargs):
+        calls["n"] += 1
+        return real(*args, **kwargs)
+
+    with patch.object(phase1_mod, "iter_phase1_candidates", wrapped), patch.object(
+        generator_mod, "iter_phase1_candidates", wrapped
+    ):
+        multi = generate_layout(site)
+    assert calls["n"] == 1
+    assert multi.layout_search["budget"]["collect_reused_baseline_generation"] is True
+    assert multi.layout_search["counts"]["generated"] >= 2
+    fields_from_layout = __import__("openparkcad.layout_benchmark", fromlist=["search_fields"]).search_fields(multi)
+    assert fields_from_layout["generated_count"] == multi.layout_search["counts"]["generated"]
+    assert fields_from_layout["collect_reused_baseline_generation"] is True
+
+
 def test_baseline_match_uses_spine_geometry_not_shared_aisle_ids() -> None:
     site = _simple_site(
         main_aisle_lateral_offsets=[-6.0, 0.0, 6.0],
