@@ -32,6 +32,7 @@ output set. See the [workspace guide](README.md) for local archive conventions.
 | `multi_jog_one_way_dual_entrance_site.json` | Multi-jog strict one-way dual entrance |
 | `adaptive_dogleg_site.json` | Adaptive offsets past a wide center obstacle |
 | `passing_bay_narrow_site.json` | Narrow two-way + synthesized passing bays |
+| `multi_spine_comparison_site.json` | Explicit `layout_search.mode=multi_spine` with CP-SAT and promotion |
 
 DXF layers for circulation (v0.3 exporters):
 

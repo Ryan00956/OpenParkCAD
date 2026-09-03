@@ -92,7 +92,11 @@ The JSON report includes the selected layout and score, attempted candidates,
 input diagnostics, traffic-graph validation, maneuver/vehicle validation,
 `site_constraint_validation`, the versioned combined `engineering_validation`,
 `candidate_snapshot`, `candidate_network_preview`, `candidate_layout_preview`,
-`candidate_layout_promotion`, and Phase 5R `operational_quality`.
+`candidate_layout_promotion`, Phase 5R `operational_quality`, and
+`layout_search` (`layout-search-1`). Default `layout_search.mode` is `legacy`.
+Set `mode=multi_spine` to compare complete spine templates (Top-K limited);
+official DXF/SVG still change only when `promote_candidate_layout_preview` is
+true.
 
 ## Selection and promotion
 
@@ -235,7 +239,7 @@ on Python 3.10 and 3.12.
 - [Changelog](CHANGELOG.md)
 - [Current status and capability matrix](docs/current_status.md)
 - [Roadmap](docs/roadmap.md)
-- [Next iteration execution plan: benchmarks and multi-spine search](docs/v0_4_multi_spine_execution_plan.md)
+- [v0.4 benchmark and multi-spine execution plan](docs/v0_4_multi_spine_execution_plan.md) (E0–E9 implemented; §12 later)
 - [Input model](docs/input_model.md)
 - [v0.3 vehicle and enforced-constraint contract](docs/v0.3_vehicle_and_constraints.md)
 - [Algorithm design discussion](docs/algorithm_design_discussion.md)

@@ -13,6 +13,17 @@ version alone, show whether a requested rule actually ran.
 
 ### Added
 
+- Optional `optimization.layout_search` (`mode=legacy|multi_spine`, `top_k`,
+  `refinement_budget_seconds`) compares complete main-aisle templates after the
+  legacy baseline. Default remains `legacy`. Promotion is still the only switch
+  that can replace official DXF/SVG. Reports add `layout_search` version
+  `layout-search-1`. Top-K and the current straight/offset/dogleg/multi-jog
+  family are explicit limits, not a global layout optimum.
+- Optional `optimization.selector_num_workers` for CP-SAT; omitted keeps the
+  OR-Tools default. CI has a Python 3.12 `.[dev,optimizer]` job.
+- Layout benchmark tools (`tools/benchmark_layouts.py`) and an explicit 20-case
+  manifest (`benchmarks/layout_v0_4.json`).
+- Example `examples/multi_spine_comparison_site.json`.
 - Route usability (first slice): when `accessible_min` is positive, classified
   accessible stalls must geometrically reach a hard accessible route within
   `constraints.accessible_route_touch_tolerance` (default 1.5 m). When

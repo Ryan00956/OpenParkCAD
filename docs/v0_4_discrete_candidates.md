@@ -15,6 +15,12 @@ swaps only the **shadow** selector.
 The claim does not establish statutory compliance, that the shadow subset is
 the exported layout, or that CP-SAT is the default.
 
+When `optimization.layout_search.mode=multi_spine`, each retained spine runs
+this same discrete model independently. A CP-SAT gap or greedy choice on one
+spine is a **local** catalog result; it is not a proof of site-global
+optimality across spines. Official replacement still requires
+`promote_candidate_layout_preview` and a fully rebuilt, checked layout.
+
 ## Invariants
 
 1. Every generated aisle is present as a `CandidateObject` (`kind=aisle`,

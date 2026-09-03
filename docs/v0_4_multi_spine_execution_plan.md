@@ -1,6 +1,6 @@
 # v0.4 下一轮执行计划：方案基准、多主路候选与持续验证
 
-状态：**待实施的执行计划**。本文件的建立不表示下列接口、命令或能力已经实现。
+状态：**E0–E9 已在本仓库实现**（第 12 节仍为后续独立工作）。默认求解仍为 legacy/greedy；`layout_search.mode=multi_spine` 为显式开关，Top-K 与当前模板族是能力边界。
 
 适用基线：2026-09-02 本地检查的 `2e2766ae81d975e042551a24c18c8a1a88056ca1`，包版本 `0.3.0`。该次本机检查为 Python 3.12.7、OR-Tools 9.15.6755，301 项测试通过，Ruff 通过；这是一次本地记录，不代表远端 CI 状态，也不是以后必须保持的测试数量。
 
@@ -650,7 +650,7 @@ finally {
 - [x] E6：真实几何场地证明旧模板第二名能够在完整优化后胜出。证据：`tests/test_layout_search_integration.py::test_t04_second_template_spine_wins_after_official_rebuild`、`examples/multi_spine_comparison_site.json`；scratch `e5e6-pytest.log`。
 - [x] E7：新开关、Schema、field_support、比较报告和正式输出相互一致。证据：`tests/test_layout_search_report.py`、Schema `layout_search`、CLI `layout-search-1`；scratch `e7-pytest.log`、`e7-cli-1/` 与 `e7-cli-2/`（两次 solve 分数与车位身份一致）。
 - [x] E8：测试矩阵通过；质量与时间对比记录提升、持平、失败和退化。证据：scratch `e8-full-pytest.log`（338 passed，覆盖率 83.57%）；`e8-benchmark/` smoke `--profile all` 20/20；full 80 runs（repeats=1）中 dogleg-obstacle 的 multi 变体在 180s 超时，同一变体在 smoke 240s 完成。
-- [ ] E9：文档只声明已完成能力；独立 wheel 执行和回退验证通过。
+- [x] E9：文档只声明已完成能力；独立 wheel 执行和回退验证通过。证据见 scratch `e9-wheel/` 与本文件文档更新。
 
 建议实施提交边界与 E 步骤对应：基准工具、CI、候选隔离、枚举提取、搜索协调、报告集成、验证收尾。每个边界可独立审查，不把纯代码移动和算法行为变化混成一个无法核对的大改动。是否创建提交、推送或发布由实际任务要求决定。
 
