@@ -18,6 +18,7 @@ from openparkcad.diagnostics import build_input_diagnostics
 from openparkcad.exporter_dxf import write_dxf
 from openparkcad.exporter_svg import write_svg
 from openparkcad.generator import generate_layout
+from openparkcad.layout_search import layout_search_report
 from openparkcad.models import site_from_dict
 from openparkcad.traffic_graph import traffic_graph_report
 
@@ -179,6 +180,7 @@ def _write_report(layout, path: str | Path) -> None:
         "aisle_width": layout.site.aisle_width,
         "traffic_graph": traffic_graph_report(layout),
         "input_diagnostics": build_input_diagnostics(layout.site, layout),
+        "layout_search": layout_search_report(layout),
     }
     target.write_text(json.dumps(data, indent=2), encoding="utf-8")
 

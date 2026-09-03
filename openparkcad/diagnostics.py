@@ -600,6 +600,12 @@ def _field_support(site: SiteSpec, layout: LayoutResult | None) -> dict[str, str
         ),
         "optimization.selector_backend_cpsat": _cpsat_backend_status(layout),
         "optimization.selector_num_workers": _selector_num_workers_status(site, layout),
+        "optimization.layout_search": _layout_search_status(site, layout),
+        "optimization.layout_search.mode": _layout_search_field_status(site, layout, "mode"),
+        "optimization.layout_search.top_k": _layout_search_field_status(site, layout, "top_k"),
+        "optimization.layout_search.refinement_budget_seconds": _layout_search_field_status(
+            site, layout, "refinement_budget_seconds"
+        ),
         "optimization.shadow_candidate_selector": "active" if layout and layout.candidate_selection else "future",
         "optimization.candidate_network_preview": "active" if layout and layout.candidate_network_preview else "future",
         "optimization.candidate_shadow_branch_turnarounds": "active" if _shadow_turnarounds_active(layout) else "future",
@@ -978,6 +984,34 @@ def _generation_mode_status(layout: LayoutResult | None, mode: str) -> str:
     if layout and layout.generation_mode == mode:
         return "active"
     return "available"
+
+
+def _layout_search_requested(site: SiteSpec) -> bool:
+    raw = site.optimization.get("layout_search")
+    return isinstance(raw, dict) and bool(raw)
+
+
+def _layout_search_status(site: SiteSpec, layout: LayoutResult | None) -> str:
+    if not _layout_search_requested(site):
+        return "available"
+    report = getattr(layout, "layout_search", {}) if layout is not None else {}
+    if isinstance(report, dict) and report.get("mode") == "multi_spine":
+        if report.get("status") in {"completed", "budget_exhausted"}:
+            return "active"
+        return "active_failed"
+    mode = site.optimization.get("layout_search", {})
+    if isinstance(mode, dict) and mode.get("mode") == "multi_spine" and layout is None:
+        return "requested_pending_layout"
+    if isinstance(mode, dict) and mode.get("mode") == "legacy":
+        return "available"
+    return "available"
+
+
+def _layout_search_field_status(site: SiteSpec, layout: LayoutResult | None, field_name: str) -> str:
+    raw = site.optimization.get("layout_search")
+    if not isinstance(raw, dict) or field_name not in raw:
+        return "available"
+    return _layout_search_status(site, layout)
 
 
 def _selector_num_workers_status(site: SiteSpec, layout: LayoutResult | None) -> str:

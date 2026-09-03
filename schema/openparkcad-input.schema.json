@@ -155,6 +155,15 @@
           "type": "integer",
           "minimum": 1,
           "description": "Optional CP-SAT search worker count. Omitted keeps the OR-Tools default."
+        },
+        "layout_search": {
+          "type": "object",
+          "properties": {
+            "mode": {"type": "string", "enum": ["legacy", "multi_spine"], "default": "legacy"},
+            "top_k": {"type": "integer", "minimum": 1, "default": 4},
+            "refinement_budget_seconds": {"type": "number", "exclusiveMinimum": 0, "default": 10.0}
+          },
+          "additionalProperties": true
         }
       },
       "additionalProperties": true

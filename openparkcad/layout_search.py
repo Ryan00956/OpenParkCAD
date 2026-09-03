@@ -31,8 +31,10 @@ class LayoutSearchConfig:
     refinement_budget_seconds: float = 10.0
 
 
-def read_layout_search(site: SiteSpec) -> LayoutSearchConfig:
-    raw = site.optimization.get("layout_search")
+def parse_layout_search_mapping(optimization: dict[str, Any] | None) -> LayoutSearchConfig:
+    if not isinstance(optimization, dict) or "layout_search" not in optimization:
+        return LayoutSearchConfig()
+    raw = optimization.get("layout_search")
     if raw is None:
         return LayoutSearchConfig()
     if not isinstance(raw, dict):
@@ -55,6 +57,34 @@ def read_layout_search(site: SiteSpec) -> LayoutSearchConfig:
     if not math.isfinite(budget_value) or budget_value <= 0:
         raise ValueError("optimization.layout_search.refinement_budget_seconds must be a positive finite number")
     return LayoutSearchConfig(mode=mode, top_k=top_k, refinement_budget_seconds=budget_value)
+
+
+def read_layout_search(site: SiteSpec) -> LayoutSearchConfig:
+    return parse_layout_search_mapping(site.optimization)
+
+
+def layout_search_report(layout: LayoutResult) -> dict[str, Any]:
+    existing = getattr(layout, "layout_search", {}) or {}
+    if isinstance(existing, dict) and existing.get("version") == "layout-search-1":
+        return dict(existing)
+    config = read_layout_search(layout.site)
+    return {
+        "version": "layout-search-1",
+        "mode": config.mode if config.mode == "multi_spine" else "legacy",
+        "status": "not_requested" if config.mode == "legacy" else "completed",
+        "baseline": None,
+        "counts": None,
+        "budget": None,
+        "candidates": [],
+        "best_preview_candidate_id": None,
+        "official_candidate_id": None,
+        "publication": {
+            "promotion_requested": bool(layout.site.optimization.get("promote_candidate_layout_preview", False)),
+            "replaced": False,
+            "reason": "legacy_path",
+        },
+        "quality_delta": None,
+    }
 
 
 def search_multi_spine(

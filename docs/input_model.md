@@ -1147,6 +1147,8 @@ optimization branch_start_step          active for branch start auto-sampling
 optimization branch_sides               active for branch side filtering
 optimization max_branches               active for limited multi-branch search
 optimization.selector_backend           active greedy default; cpsat uses OR-Tools when installed, else fail-closes to greedy
+optimization.selector_num_workers       optional CP-SAT workers; omitted keeps OR-Tools default; illegal values are input errors
+optimization.layout_search              optional; default mode=legacy. mode=multi_spine compares complete spines (Top-K, extra budget). Illegal values are input errors, not silent legacy.
 optimization stall modules              active per-side strips (`stall_module`); depend on parent aisle; preview uses selected modules
 optimization stall module families      active on spine, branch, and connectors; at most one stall_type per family_slot (side or segment)
 optimization.stall_module_segment_stalls  active default 4 stalls per module; explicit 0 = whole side
