@@ -152,6 +152,22 @@ def test_t04_second_template_spine_wins_after_official_rebuild() -> None:
     assert all(stall.served_by_aisle_id in official_ids or stall.served_by_aisle_id is None for stall in result.stalls)
 
 
+def test_t06_baseline_keeps_local_promotion_gains() -> None:
+    site = _simple_site(
+        promote_candidate_layout_preview=True,
+        layout_search={"mode": "multi_spine", "top_k": 4, "refinement_budget_seconds": 20.0},
+    )
+    legacy = generate_layout_legacy(
+        replace(site, optimization={**site.optimization, "layout_search": {"mode": "legacy"}})
+    )
+    multi = generate_layout(site)
+    assert legacy.candidate_layout_promotion.get("status") in {"promoted", "rejected", "not_requested"}
+    if legacy.generation_mode == "candidate_layout_promoted":
+        assert multi.generation_mode == "candidate_layout_promoted"
+        assert _geometry_key(multi) == _geometry_key(legacy) or multi.layout_search["publication"]["replaced"] is True
+    assert multi.layout_search["baseline"]["local_promotion"] == legacy.candidate_layout_promotion.get("status")
+
+
 def test_t05_unverified_or_invalid_candidate_cannot_replace_baseline() -> None:
     from openparkcad.layout_candidates import LayoutCandidateEvaluation
     from openparkcad.layout_search import choose_official

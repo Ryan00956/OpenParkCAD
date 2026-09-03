@@ -649,7 +649,7 @@ finally {
 - [x] E5：Top-K、基线保留、计时和预算状态可解释。证据：`openparkcad/layout_search.py`、`tests/test_layout_search.py`；scratch `e5e6-pytest.log`。
 - [x] E6：真实几何场地证明旧模板第二名能够在完整优化后胜出。证据：`tests/test_layout_search_integration.py::test_t04_second_template_spine_wins_after_official_rebuild`、`examples/multi_spine_comparison_site.json`；scratch `e5e6-pytest.log`。
 - [x] E7：新开关、Schema、field_support、比较报告和正式输出相互一致。证据：`tests/test_layout_search_report.py`、Schema `layout_search`、CLI `layout-search-1`；scratch `e7-pytest.log`、`e7-cli-1/` 与 `e7-cli-2/`（两次 solve 分数与车位身份一致）。
-- [ ] E8：测试矩阵通过；质量与时间对比记录提升、持平、失败和退化。
+- [x] E8：测试矩阵通过；质量与时间对比记录提升、持平、失败和退化。证据：scratch `e8-full-pytest.log`（338 passed，覆盖率 83.57%）；`e8-benchmark/` smoke `--profile all` 20/20；full 80 runs（repeats=1）中 dogleg-obstacle 的 multi 变体在 180s 超时，同一变体在 smoke 240s 完成。
 - [ ] E9：文档只声明已完成能力；独立 wheel 执行和回退验证通过。
 
 建议实施提交边界与 E 步骤对应：基准工具、CI、候选隔离、枚举提取、搜索协调、报告集成、验证收尾。每个边界可独立审查，不把纯代码移动和算法行为变化混成一个无法核对的大改动。是否创建提交、推送或发布由实际任务要求决定。
