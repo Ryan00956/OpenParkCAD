@@ -8,6 +8,7 @@ from openparkcad.cli import _final_layout_errors
 from openparkcad.generator import generate_layout, generate_layout_legacy
 from openparkcad.models import AisleClassSpec, EntranceSpec, SiteSpec, StallSpec, VehicleSpec, site_from_dict
 from openparkcad.scoring import score_total
+from tests.ortools_util import require_ortools
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 COMPARISON_EXAMPLE = REPO_ROOT / "examples" / "multi_spine_comparison_site.json"
@@ -224,6 +225,7 @@ def test_t04_second_template_spine_wins_after_official_rebuild() -> None:
 
 
 def test_example_multi_spine_comparison_site_promotes_on_generate_layout() -> None:
+    require_ortools()
     payload = json.loads(COMPARISON_EXAMPLE.read_text(encoding="utf-8"))
     site = site_from_dict(payload)
     assert site.optimization.get("layout_search", {}).get("mode") == "multi_spine"
